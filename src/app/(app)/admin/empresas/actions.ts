@@ -4,7 +4,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireRole } from "@/lib/session";
+import { requireAdminGlobal } from "@/lib/session";
 import { ROLES } from "@/lib/constants";
 
 export type Result = { ok: boolean; id?: string; error?: string };
@@ -22,7 +22,7 @@ const empresaSchema = z.object({
 
 /** Crea una empresa cliente y, opcionalmente, su usuario administrador. */
 export async function crearEmpresaAction(input: z.input<typeof empresaSchema>): Promise<Result> {
-  await requireRole([ROLES.ADMIN_P360]);
+  await requireAdminGlobal();
   const parsed = empresaSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Datos inválidos." };
   const d = parsed.data;
@@ -60,7 +60,7 @@ export async function crearEmpresaAction(input: z.input<typeof empresaSchema>): 
 
 /** Activa o desactiva una empresa. */
 export async function toggleEmpresaActivaAction(empresaId: string): Promise<Result> {
-  await requireRole([ROLES.ADMIN_P360]);
+  await requireAdminGlobal();
   const empresa = await prisma.empresa.findUnique({ where: { id: empresaId }, select: { activa: true } });
   if (!empresa) return { ok: false, error: "Empresa no encontrada." };
   await prisma.empresa.update({ where: { id: empresaId }, data: { activa: !empresa.activa } });

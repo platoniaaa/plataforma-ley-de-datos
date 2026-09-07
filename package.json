@@ -10,16 +10,21 @@
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "prisma db seed",
+    "db:seed:demo": "tsx prisma/seed-demo.ts",
+    "crear-admin": "tsx prisma/crear-admin.ts",
     "db:studio": "prisma studio",
-    "db:reset": "prisma db push --force-reset && prisma db seed"
+    "db:reset": "prisma db push --force-reset && tsx prisma/seed-demo.ts"
   },
   "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed-catalogo.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "@supabase/supabase-js": "^2.110.0",
+    "@vercel/analytics": "^2.0.1",
     "bcryptjs": "^3.0.3",
+    "exceljs": "^4.4.0",
+    "mammoth": "^1.12.2",
     "next": "16.2.9",
     "next-auth": "^5.0.0-beta.31",
     "prisma": "^6.19.3",

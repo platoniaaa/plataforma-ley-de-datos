@@ -3,9 +3,10 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireSession, esStaffP360 } from "@/lib/session";
+import { requireSession, esStaffP360, sinAccesoAEmpresa } from "@/lib/session";
 import { esParticipanteDominio } from "@/lib/data/diagnosticos";
 import { requiereComentario, ROLES, VALORES } from "@/lib/constants";
+import { consolidarAportes } from "@/lib/engines/consolidacion";
 
 const schema = z.object({
   respuestaId: z.string().min(1),
@@ -15,6 +16,52 @@ const schema = z.object({
 });
 
 export type RespuestaResult = { ok: boolean; error?: string };
+
+/**
+ * Recalcula la respuesta oficial a partir de los aportes de los participantes.
+ * No hace nada si el consultor la fijó a mano: su criterio manda sobre la regla.
+ */
+async function reconsolidarRespuesta(respuestaId: string, ultimoAutorId: string): Promise<void> {
+  const respuesta = await prisma.respuesta.findUnique({
+    where: { id: respuestaId },
+    select: {
+      consolidadaManual: true,
+      aportes: {
+        select: {
+          valor: true,
+          comentario: true,
+          riesgoIdentificado: true,
+          user: { select: { nombre: true } },
+        },
+      },
+    },
+  });
+  if (!respuesta || respuesta.consolidadaManual) return;
+
+  const consolidado = consolidarAportes(
+    respuesta.aportes.map((a) => ({
+      valor: a.valor,
+      comentario: a.comentario,
+      riesgoIdentificado: a.riesgoIdentificado,
+      autor: a.user.nombre,
+    }))
+  );
+
+  const completa =
+    consolidado.valor != null &&
+    (!requiereComentario(consolidado.valor) || Boolean(consolidado.comentario?.trim()));
+
+  await prisma.respuesta.update({
+    where: { id: respuestaId },
+    data: {
+      valor: consolidado.valor,
+      comentario: consolidado.comentario,
+      riesgoIdentificado: consolidado.riesgoIdentificado,
+      estado: completa ? "RESPONDIDA" : "PENDIENTE",
+      respondidoPorId: ultimoAutorId,
+    },
+  });
+}
 
 export async function guardarRespuesta(input: z.input<typeof schema>): Promise<RespuestaResult> {
   const session = await requireSession();
@@ -34,7 +81,7 @@ export async function guardarRespuesta(input: z.input<typeof schema>): Promise<R
   if (!respuesta) return { ok: false, error: "Respuesta no encontrada." };
 
   const diag = respuesta.diagnosticoDominio.diagnostico;
-  if (!esStaffP360(session.user.role) && diag.empresaId !== session.user.empresaId) {
+  if (sinAccesoAEmpresa(session, diag.empresaId)) {
     return { ok: false, error: "Sin acceso." };
   }
   // El Responsable de Dominio solo responde los dominios en los que participa.
@@ -53,22 +100,43 @@ export async function guardarRespuesta(input: z.input<typeof schema>): Promise<R
     return { ok: false, error: "El dominio ya fue enviado a validación." };
   }
 
-  // El guardado es automático, así que acepta borradores incompletos: nunca se pierde
-  // lo avanzado. La regla del §7.5 (comentario obligatorio en 0/1/2/N-A/Otro) se exige
-  // al ENVIAR el dominio; aquí solo determina si la respuesta ya está completa.
-  const completa = !requiereComentario(valor) || Boolean(comentario.trim());
+  const esConsultor = esStaffP360(session.user.role);
 
-  await prisma.respuesta.update({
-    where: { id: respuestaId },
-    data: {
-      valor,
-      comentario: comentario.trim() || null,
-      riesgoIdentificado: riesgoIdentificado.trim() || null,
-      // Una respuesta observada por el consultor vuelve a "respondida" al corregirse.
-      estado: completa ? "RESPONDIDA" : "PENDIENTE",
-      respondidoPorId: session.user.id,
-    },
-  });
+  if (esConsultor) {
+    // El consultor escribe directamente la respuesta oficial y la deja fijada, para que
+    // un aporte posterior de un participante no le sobrescriba el criterio.
+    const completa = !requiereComentario(valor) || Boolean(comentario.trim());
+    await prisma.respuesta.update({
+      where: { id: respuestaId },
+      data: {
+        valor,
+        comentario: comentario.trim() || null,
+        riesgoIdentificado: riesgoIdentificado.trim() || null,
+        estado: completa ? "RESPONDIDA" : "PENDIENTE",
+        respondidoPorId: session.user.id,
+        consolidadaManual: true,
+      },
+    });
+  } else {
+    // El participante escribe SU aporte: nunca toca lo de sus colegas. La respuesta
+    // oficial se recalcula a partir de todos los aportes del dominio.
+    await prisma.aporteRespuesta.upsert({
+      where: { respuestaId_userId: { respuestaId, userId: session.user.id } },
+      create: {
+        respuestaId,
+        userId: session.user.id,
+        valor,
+        comentario: comentario.trim() || null,
+        riesgoIdentificado: riesgoIdentificado.trim() || null,
+      },
+      update: {
+        valor,
+        comentario: comentario.trim() || null,
+        riesgoIdentificado: riesgoIdentificado.trim() || null,
+      },
+    });
+    await reconsolidarRespuesta(respuestaId, session.user.id);
+  }
 
   // Marcar el dominio en ejecución (si no venía de una corrección post-validación).
   if (!dominioBloqueado) {
@@ -88,7 +156,14 @@ export async function guardarRespuesta(input: z.input<typeof schema>): Promise<R
 // ───────────────────────── Envío del dominio a validación ─────────────────────────
 
 export type Faltante = { orden: number; motivo: string };
-export type EnvioResult = { ok: boolean; error?: string; faltantes?: Faltante[] };
+export type Colega = { nombre: string; faltan: number; eresTu: boolean };
+export type EnvioResult = {
+  ok: boolean;
+  error?: string;
+  faltantes?: Faltante[];
+  /** Participantes del dominio que todavía no registran todas sus respuestas. */
+  colegas?: Colega[];
+};
 
 /**
  * Cierra el cuestionario del dominio y lo deja en manos del consultor.
@@ -103,10 +178,12 @@ export async function enviarDominio(diagnosticoDominioId: string): Promise<Envio
     include: {
       diagnostico: { select: { id: true, empresaId: true } },
       dominio: { select: { orden: true } },
+      participantes: { select: { userId: true, user: { select: { nombre: true } } } },
       respuestas: {
         include: {
           pregunta: { select: { orden: true, evidenciaObligatoria: true } },
           evidencias: { select: { id: true, archivoPath: true } },
+          aportes: { select: { userId: true, valor: true } },
         },
         orderBy: { pregunta: { orden: "asc" } },
       },
@@ -114,7 +191,7 @@ export async function enviarDominio(diagnosticoDominioId: string): Promise<Envio
   });
   if (!dd) return { ok: false, error: "Dominio no encontrado." };
 
-  if (!esStaffP360(session.user.role) && dd.diagnostico.empresaId !== session.user.empresaId) {
+  if (sinAccesoAEmpresa(session, dd.diagnostico.empresaId)) {
     return { ok: false, error: "Sin acceso." };
   }
   if (
@@ -125,6 +202,28 @@ export async function enviarDominio(diagnosticoDominioId: string): Promise<Envio
   }
   if (["EN_VALIDACION", "COMPLETADO"].includes(dd.estado)) {
     return { ok: false, error: "Este dominio ya fue enviado a validación." };
+  }
+
+  // Enviar deja el dominio en solo lectura para TODOS sus participantes, no solo para
+  // quien aprieta el botón. Antes de permitírselo a un participante hay que verificar que
+  // sus colegas ya registraron lo suyo: el 21-08 el primero en terminar el RAT cerró el
+  // dominio mientras una compañera iba en la pregunta 5, y la dejó afuera sin aviso.
+  //
+  // El consultor sí puede cerrarlo con lo que haya: es su decisión de alcance, y de otro
+  // modo un participante mal asignado dejaría el dominio abierto para siempre.
+  if (session.user.role === ROLES.RESPONSABLE_DOMINIO) {
+    const colegas: Colega[] = dd.participantes
+      .map((p) => ({
+        nombre: p.user.nombre,
+        eresTu: p.userId === session.user.id,
+        faltan: dd.respuestas.filter(
+          (r) => !r.aportes.some((a) => a.userId === p.userId && a.valor != null)
+        ).length,
+      }))
+      .filter((c) => c.faltan > 0)
+      .sort((a, b) => b.faltan - a.faltan);
+
+    if (colegas.length > 0) return { ok: false, colegas };
   }
 
   const faltantes: Faltante[] = [];
@@ -138,7 +237,14 @@ export async function enviarDominio(diagnosticoDominioId: string): Promise<Envio
       faltantes.push({ orden, motivo: "falta el comentario obligatorio" });
       continue;
     }
-    if (r.pregunta.evidenciaObligatoria && !r.evidencias.some((e) => e.archivoPath)) {
+    // La evidencia solo se exige cuando la respuesta afirma que el control EXISTE (3/4/5).
+    // Para 0/1/2/N-A/Otro no hay qué adjuntar; el comentario obligatorio es la justificación.
+    // (Consistente con el motor de brechas, src/lib/engines/brechas.ts.)
+    if (
+      r.pregunta.evidenciaObligatoria &&
+      ["3", "4", "5"].includes(r.valor) &&
+      !r.evidencias.some((e) => e.archivoPath)
+    ) {
       faltantes.push({ orden, motivo: "falta la evidencia obligatoria" });
     }
   }

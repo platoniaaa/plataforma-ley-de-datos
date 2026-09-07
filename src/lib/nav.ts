@@ -41,6 +41,13 @@ export const NAV_ITEMS: NavItem[] = [
     tour: "nav-empresas",
   },
   {
+    href: "/admin/accesos",
+    label: "Accesos",
+    icon: "users",
+    roles: [ROLES.ADMIN_P360],
+    tour: "nav-accesos",
+  },
+  {
     href: "/admin/catalogo",
     label: "Catálogo LPDP",
     icon: "book",
@@ -49,6 +56,15 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-export function navForRole(role: Role): NavItem[] {
-  return NAV_ITEMS.filter((i) => i.roles.includes(role));
+/**
+ * Menú de una sesión. `empresaId` importa porque "Empresas" y "Catálogo LPDP" no son de
+ * un cliente sino de la plataforma entera: una cuenta de Procesos360 acotada a una
+ * empresa —la de demostración, por ejemplo— no debe ver ni tocar lo que es de todos.
+ */
+export function navForRole(role: Role, empresaId?: string | null): NavItem[] {
+  return NAV_ITEMS.filter((i) => {
+    if (!i.roles.includes(role)) return false;
+    if (i.href.startsWith("/admin/") && empresaId) return false;
+    return true;
+  });
 }

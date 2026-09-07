@@ -46,3 +46,12 @@ next-env.d.ts
 
 # uploads de evidencias (local)
 /uploads
+
+# Datos de cliente (personales) — NUNCA en el repo (es público). Ley 21.719.
+# Planillas de levantamiento, listas de usuarios para importar, etc.
+*.xlsx
+*.xls
+*.csv
+
+# Copias completas de la base: contienen datos personales y hashes de contrasena.
+docs/respaldos/

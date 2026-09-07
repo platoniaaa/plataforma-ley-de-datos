@@ -13,6 +13,7 @@ type DomCfg = {
   nombre: string;
   incluido: boolean;
   participantesIds: string[];
+  responsablesEvidenciaIds: string[];
   areaId: string;
   justificacionNoAplica: string;
 };
@@ -41,13 +42,32 @@ export function ConfigurarForm({
 
   function toggleParticipante(ddId: string, userId: string) {
     setDominios((prev) =>
+      prev.map((d) => {
+        if (d.ddId !== ddId) return d;
+        const esParticipante = d.participantesIds.includes(userId);
+        return {
+          ...d,
+          participantesIds: esParticipante
+            ? d.participantesIds.filter((x) => x !== userId)
+            : [...d.participantesIds, userId],
+          // Al quitar como participante, también deja de ser responsable de evidencia.
+          responsablesEvidenciaIds: esParticipante
+            ? d.responsablesEvidenciaIds.filter((x) => x !== userId)
+            : d.responsablesEvidenciaIds,
+        };
+      })
+    );
+  }
+
+  function toggleResponsable(ddId: string, userId: string) {
+    setDominios((prev) =>
       prev.map((d) =>
         d.ddId === ddId
           ? {
               ...d,
-              participantesIds: d.participantesIds.includes(userId)
-                ? d.participantesIds.filter((x) => x !== userId)
-                : [...d.participantesIds, userId],
+              responsablesEvidenciaIds: d.responsablesEvidenciaIds.includes(userId)
+                ? d.responsablesEvidenciaIds.filter((x) => x !== userId)
+                : [...d.responsablesEvidenciaIds, userId],
             }
           : d
       )
@@ -64,6 +84,7 @@ export function ConfigurarForm({
           diagnosticoDominioId: d.ddId,
           incluido: d.incluido,
           participantesIds: d.participantesIds,
+          responsablesEvidenciaIds: d.responsablesEvidenciaIds,
           areaId: d.areaId,
           justificacionNoAplica: d.justificacionNoAplica,
         })),
@@ -81,8 +102,12 @@ export function ConfigurarForm({
   return (
     <form onSubmit={onSubmit} className="space-y-2">
       <p className="text-sm text-slate-500">
-        Todos los participantes de un dominio responden ese dominio por igual: no hay un
-        responsable principal.
+        Todos los participantes de un dominio responden ese dominio por igual. Con el botón{" "}
+        <span className="rounded-full border border-orange-300 bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700">
+          📎 evidencia
+        </span>{" "}
+        marca quién está a cargo de subir la evidencia (designación organizativa; no cambia la
+        regla de envío).
       </p>
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table className="w-full text-sm">
@@ -132,28 +157,54 @@ export function ConfigurarForm({
                   {d.participantesIds.length > 0 && (
                     <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
                       {d.participantesIds.map(nombreDe).join(", ")}
+                      {d.responsablesEvidenciaIds.length > 0 && (
+                        <span className="font-medium text-orange-600">
+                          {" "}· 📎 {d.responsablesEvidenciaIds.length} de evidencia
+                        </span>
+                      )}
                     </p>
                   )}
 
                   {abierto === d.ddId && (
                     <div className="mt-2 max-h-60 space-y-1 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
-                      {usuarios.map((u) => (
-                        <label
-                          key={u.id}
-                          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-slate-50"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={d.participantesIds.includes(u.id)}
-                            onChange={() => toggleParticipante(d.ddId, u.id)}
-                            className="h-4 w-4 accent-brand-600"
-                          />
-                          <span className="text-slate-700">{u.nombre}</span>
-                          {u.cargo && u.cargo !== u.nombre && (
-                            <span className="text-xs text-slate-400">· {u.cargo}</span>
-                          )}
-                        </label>
-                      ))}
+                      {usuarios.map((u) => {
+                        const esParticipante = d.participantesIds.includes(u.id);
+                        const esResponsable = d.responsablesEvidenciaIds.includes(u.id);
+                        return (
+                          <div
+                            key={u.id}
+                            className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-slate-50"
+                          >
+                            <label className="flex flex-1 cursor-pointer items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={esParticipante}
+                                onChange={() => toggleParticipante(d.ddId, u.id)}
+                                className="h-4 w-4 accent-brand-600"
+                              />
+                              <span className="text-slate-700">{u.nombre}</span>
+                              {u.cargo && u.cargo !== u.nombre && (
+                                <span className="text-xs text-slate-400">· {u.cargo}</span>
+                              )}
+                            </label>
+                            {esParticipante && (
+                              <button
+                                type="button"
+                                onClick={() => toggleResponsable(d.ddId, u.id)}
+                                title="Responsable de subir la evidencia de este dominio"
+                                className={
+                                  "shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors " +
+                                  (esResponsable
+                                    ? "border-orange-300 bg-orange-100 text-orange-700"
+                                    : "border-slate-200 text-slate-400 hover:border-orange-300 hover:text-orange-600")
+                                }
+                              >
+                                📎 evidencia
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </td>

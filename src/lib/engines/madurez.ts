@@ -6,6 +6,7 @@ import { clasificarMadurez, valorNumerico, type NivelMadurez } from "@/lib/const
 export type RespuestaInput = {
   preguntaId: string;
   valor: string | null;
+  completo?: boolean; // cumple las reglas para enviar (valor + comentario + evidencia si aplica)
 };
 
 export type DominioInput = {
@@ -22,10 +23,11 @@ export type ResultadoDominio = {
   nombre: string;
   promedio: number | null;
   nivel: NivelMadurez | null;
-  respondidas: number;
+  respondidas: number; // con valor elegido
+  completas: number; // listas para enviar (valor + comentario + evidencia si aplica)
   puntuables: number;
   totalPreguntas: number;
-  avance: number; // % respondidas sobre total
+  avance: number; // % COMPLETAS sobre total (no solo "con valor")
 };
 
 export type ResultadoMadurez = {
@@ -47,6 +49,7 @@ export function calcularMadurez(dominios: DominioInput[]): ResultadoMadurez {
       .map((r) => valorNumerico(r.valor))
       .filter((n): n is number => n != null);
     const respondidas = d.respuestas.filter((r) => r.valor != null).length;
+    const completas = d.respuestas.filter((r) => r.completo).length;
     const prom = promedio(puntuables);
     return {
       dominioId: d.dominioId,
@@ -55,9 +58,11 @@ export function calcularMadurez(dominios: DominioInput[]): ResultadoMadurez {
       promedio: prom,
       nivel: clasificarMadurez(prom),
       respondidas,
+      completas,
       puntuables: puntuables.length,
       totalPreguntas: d.totalPreguntas,
-      avance: d.totalPreguntas > 0 ? Math.round((respondidas / d.totalPreguntas) * 100) : 0,
+      // Avance = % de preguntas COMPLETAS (listas para enviar), no solo con valor elegido.
+      avance: d.totalPreguntas > 0 ? Math.round((completas / d.totalPreguntas) * 100) : 0,
     };
   });
 

@@ -7,7 +7,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
-import { enviarDominio, type Faltante } from "./actions";
+import { enviarDominio, type Faltante, type Colega } from "./actions";
 
 export function EnviarDominio({
   diagnosticoDominioId,
@@ -23,6 +23,7 @@ export function EnviarDominio({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [faltantes, setFaltantes] = useState<Faltante[] | null>(null);
+  const [colegas, setColegas] = useState<Colega[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   if (enviado) {
@@ -40,10 +41,13 @@ export function EnviarDominio({
   function onEnviar() {
     setError(null);
     setFaltantes(null);
+    setColegas(null);
     startTransition(async () => {
       const res = await enviarDominio(diagnosticoDominioId);
       if (res.ok) {
         router.refresh();
+      } else if (res.colegas) {
+        setColegas(res.colegas);
       } else if (res.faltantes) {
         setFaltantes(res.faltantes);
       } else {
@@ -60,8 +64,14 @@ export function EnviarDominio({
             ¿Terminaste de responder este dominio?
           </p>
           <p className="mt-1 text-sm text-slate-500">
-            Tus respuestas se guardan automáticamente. Al enviar, el dominio pasa al
-            consultor y queda en solo lectura.
+            Tus respuestas se guardan automáticamente. No hace falta enviar para que queden
+            registradas.
+          </p>
+          {/* La consecuencia no era evidente y alguien cerró un dominio dejando a una
+              compañera a mitad de camino. Ahora se dice antes de apretar. */}
+          <p className="mt-1 text-sm font-medium text-orange-700">
+            Al enviar, el dominio queda en solo lectura <strong>para todos</strong> los que
+            responden este dominio, no solo para ti.
           </p>
         </div>
         <Button onClick={onEnviar} disabled={pending}>
@@ -73,6 +83,26 @@ export function EnviarDominio({
         {respondidas} de {totalPreguntas} preguntas completas.
       </p>
 
+      {colegas && colegas.length > 0 && (
+        <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 p-4">
+          <p className="text-sm font-semibold text-orange-900">
+            Todavía no se puede enviar: este dominio lo responden varias personas.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {colegas.map((c) => (
+              <li key={c.nombre} className="text-sm text-orange-800">
+                <span className="font-semibold">{c.eresTu ? "Tú" : c.nombre}</span> —{" "}
+                {c.faltan === 1 ? "falta 1 pregunta" : `faltan ${c.faltan} preguntas`}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-sm text-orange-800">
+            Si enviaras ahora, quedarían fuera sin haber alcanzado a responder. Avísales, o
+            pídele al consultor que lo cierre así.
+          </p>
+        </div>
+      )}
+
       {faltantes && faltantes.length > 0 && (
         <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 p-4">
           <p className="text-sm font-semibold text-orange-900">
@@ -82,7 +112,13 @@ export function EnviarDominio({
           <ul className="mt-2 space-y-1">
             {faltantes.map((f) => (
               <li key={f.orden} className="text-sm text-orange-800">
-                Pregunta {f.orden} — {f.motivo}
+                <a
+                  href={`#pregunta-${f.orden}`}
+                  className="font-semibold underline underline-offset-2 hover:text-orange-900"
+                >
+                  Pregunta {f.orden}
+                </a>{" "}
+                — {f.motivo}
               </li>
             ))}
           </ul>

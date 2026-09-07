@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { requireSession } from "@/lib/session";
-import { ROLES, TIPO_DIAGNOSTICO, NIVEL_MADUREZ } from "@/lib/constants";
+import { requireSession, puedeRevisarDominios } from "@/lib/session";
+import { ROLES, TIPO_DIAGNOSTICO, NIVEL_MADUREZ, respuestaCompleta } from "@/lib/constants";
 import { fmt } from "@/lib/utils";
 import { getDiagnosticoFull, madurezDeDiagnostico } from "@/lib/data/diagnosticos";
 import { PageHeader } from "@/components/PageHeader";
@@ -16,15 +16,28 @@ export default async function DiagnosticoDetallePage({
   const { id } = await params;
   const session = await requireSession();
   const diag = await getDiagnosticoFull(id, session);
+  // El equipo, sin repetir a quien ya figura a cargo.
+  const apoyo = diag.equipo
+    .filter((e) => e.userId !== diag.consultorId)
+    .map((e) => e.user.nombre);
   const madurez = madurezDeDiagnostico(diag);
 
   const dominiosIncluidos = diag.dominios.filter((d) => d.incluido);
   const totalPreguntas = dominiosIncluidos.reduce((a, d) => a + d.dominio._count.preguntas, 0);
-  const respondidas = dominiosIncluidos.reduce(
-    (a, d) => a + d.respuestas.filter((r) => r.valor != null).length,
+  const completas = dominiosIncluidos.reduce(
+    (a, d) =>
+      a +
+      d.respuestas.filter((r) =>
+        respuestaCompleta({
+          valor: r.valor,
+          comentario: r.comentario,
+          evidenciaObligatoria: r.pregunta.evidenciaObligatoria,
+          tieneEvidencia: r.evidencias.some((e) => e.archivoPath),
+        })
+      ).length,
     0
   );
-  const avanceGlobal = totalPreguntas ? Math.round((respondidas / totalPreguntas) * 100) : 0;
+  const avanceGlobal = totalPreguntas ? Math.round((completas / totalPreguntas) * 100) : 0;
 
   // Dominios asignados al usuario de la sesión (para destacarlos y orientarlo).
   const misDominios = dominiosIncluidos.filter((d) =>
@@ -33,10 +46,14 @@ export default async function DiagnosticoDetallePage({
   // El Responsable de Dominio solo responde su cuestionario: sin pestañas de
   // gestión, sin Configurar y sin entrar a dominios ajenos.
   const esResponsableRol = session.user.role === ROLES.RESPONSABLE_DOMINIO;
+  // Quien revisa el levantamiento por parte del cliente sigue sin gestión ni Configurar
+  // —no es su trabajo— pero sí abre los diez dominios: no se puede controlar lo que no se
+  // puede leer, y controlar es para lo que se le dio el permiso.
+  const revisa = await puedeRevisarDominios(diag.empresaId);
 
   return (
     <>
-      <DiagnosticoNav id={id} active="resumen" role={session.user.role} />
+      <DiagnosticoNav id={id} active="resumen" />
       <PageHeader
         title={diag.nombre}
         subtitle={`${diag.empresa.razonSocial} · ${TIPO_DIAGNOSTICO[diag.tipo as keyof typeof TIPO_DIAGNOSTICO] ?? diag.tipo}`}
@@ -73,13 +90,20 @@ export default async function DiagnosticoDetallePage({
           <StatCard label="Avance">
             <span className="text-2xl font-bold text-slate-800">{avanceGlobal}%</span>
             <span className="ml-1 text-xs text-slate-400">
-              ({respondidas}/{totalPreguntas})
+              ({completas}/{totalPreguntas})
             </span>
           </StatCard>
           <StatCard label="Consultor">
             <span className="text-sm font-medium text-slate-700">
-              {diag.consultor?.nombre ?? "—"}
+              {diag.consultor?.nombre ?? "Sin asignar"}
             </span>
+            {/* El resto del equipo: si el que está a cargo no está, el cliente tiene que
+                saber a quién más puede dirigirse. */}
+            {apoyo.length > 0 && (
+              <span className="mt-0.5 block text-xs text-slate-400">
+                con {apoyo.join(", ")}
+              </span>
+            )}
           </StatCard>
         </div>
       )}
@@ -140,7 +164,7 @@ export default async function DiagnosticoDetallePage({
                 );
               }
               // El responsable de dominio no entra a los dominios de otros.
-              const bloqueado = esResponsableRol && !esMio;
+              const bloqueado = esResponsableRol && !esMio && !revisa;
               const contenido = (
                 <>
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-sm font-bold text-brand">

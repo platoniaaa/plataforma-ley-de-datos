@@ -21,7 +21,7 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
-const RUT_HONDA = "11.111.111-1";
+const RUT_HONDA = "96.870.620-9";
 const PASSWORD = "Demo1234";
 
 // Roles únicos de la columna del Excel (cargo tal cual aparece → email cargo@honda.cl).

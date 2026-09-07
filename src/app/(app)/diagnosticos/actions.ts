@@ -3,9 +3,9 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireSession, esStaffP360 } from "@/lib/session";
+import { requireSession, esStaffP360, sinAccesoAEmpresa } from "@/lib/session";
 import { assertAccesoDiagnostico } from "@/lib/data/diagnosticos";
-import { TIPO_DIAGNOSTICO, ESTADO_DIAGNOSTICO } from "@/lib/constants";
+import { TIPO_DIAGNOSTICO, ESTADO_DIAGNOSTICO, ROLES_P360 } from "@/lib/constants";
 
 export type CrearResult = { ok: boolean; id?: string; error?: string };
 export type ConfigResult = { ok: boolean; error?: string };
@@ -27,8 +27,14 @@ export async function crearDiagnosticoAction(input: z.input<typeof crearSchema>)
   const { empresaId, nombre, tipo, fechaInicio, fechaCierre, consultorId } = parsed.data;
 
   // Acceso: staff P360 crea para cualquier empresa; ADMIN_EMPRESA solo la suya.
-  if (!esStaffP360(session.user.role) && empresaId !== session.user.empresaId) {
+  if (sinAccesoAEmpresa(session, empresaId)) {
     return { ok: false, error: "Sin acceso a esa empresa." };
+  }
+
+  // El consultor asignado debe existir y ser staff P360; no cualquier userId del cliente.
+  if (consultorId) {
+    const ok = await prisma.user.count({ where: { id: consultorId, role: { in: ROLES_P360 } } });
+    if (ok === 0) return { ok: false, error: "El consultor asignado no es parte del staff Procesos360." };
   }
 
   const dominios = await prisma.dominio.findMany({
@@ -80,6 +86,7 @@ const configSchema = z.object({
       diagnosticoDominioId: z.string().min(1),
       incluido: z.boolean(),
       participantesIds: z.array(z.string()).optional().default([]),
+      responsablesEvidenciaIds: z.array(z.string()).optional().default([]),
       areaId: z.string().optional().default(""),
       justificacionNoAplica: z.string().max(1000).optional().default(""),
     })
@@ -96,40 +103,122 @@ export async function configurarDiagnosticoAction(input: z.input<typeof configSc
   const diag = await assertAccesoDiagnostico(data.diagnosticoId, session);
   if (!diag) return { ok: false, error: "Sin acceso al diagnóstico." };
 
-  await prisma.diagnostico.update({
-    where: { id: data.diagnosticoId },
-    data: {
-      ...(data.nombre ? { nombre: data.nombre } : {}),
-      ...(data.tipo ? { tipo: data.tipo } : {}),
-      ...(data.fechaInicio !== undefined ? { fechaInicio: data.fechaInicio ? new Date(data.fechaInicio) : null } : {}),
-      ...(data.fechaCierre !== undefined ? { fechaCierre: data.fechaCierre ? new Date(data.fechaCierre) : null } : {}),
-      ...(data.consultorId !== undefined ? { consultorId: data.consultorId || null } : {}),
-      estado: diag.estado === "BORRADOR" ? "CONFIGURADO" : diag.estado,
-    },
+  // El acceso valida `diagnosticoId`, no los IDs del array de dominios: sin este chequeo se
+  // podrían configurar dominios de OTRO diagnóstico (y otra empresa) — IDOR de escritura.
+  const ddIds = data.dominios.map((d) => d.diagnosticoDominioId);
+  if (new Set(ddIds).size !== ddIds.length) return { ok: false, error: "Dominios duplicados." };
+  const ddValidos = await prisma.diagnosticoDominio.count({
+    where: { id: { in: ddIds }, diagnosticoId: data.diagnosticoId },
   });
-
-  for (const d of data.dominios) {
-    await prisma.diagnosticoDominio.update({
-      where: { id: d.diagnosticoDominioId },
-      data: {
-        incluido: d.incluido,
-        areaId: d.areaId || null,
-        justificacionNoAplica: d.justificacionNoAplica.trim() || null,
-      },
-    });
-
-    // Participantes: se deja el conjunto exactamente como viene del formulario.
-    const ids = [...new Set(d.participantesIds.filter(Boolean))];
-    await prisma.participanteDominio.deleteMany({
-      where: { diagnosticoDominioId: d.diagnosticoDominioId, userId: { notIn: ids } },
-    });
-    if (ids.length > 0) {
-      await prisma.participanteDominio.createMany({
-        data: ids.map((userId) => ({ diagnosticoDominioId: d.diagnosticoDominioId, userId })),
-        skipDuplicates: true,
-      });
-    }
+  if (ddValidos !== ddIds.length) {
+    return { ok: false, error: "Dominios inválidos para este diagnóstico." };
   }
+
+  // Participantes y áreas deben pertenecer a la empresa del diagnóstico, no a la del solicitante.
+  const participanteIds = [...new Set(data.dominios.flatMap((d) => d.participantesIds).filter(Boolean))];
+  const areaIds = [...new Set(data.dominios.map((d) => d.areaId).filter(Boolean))];
+  const [participantesOk, areasOk, consultorOk] = await Promise.all([
+    participanteIds.length
+      ? prisma.user.count({ where: { id: { in: participanteIds }, empresaId: diag.empresaId } })
+      : 0,
+    areaIds.length
+      ? prisma.area.count({ where: { id: { in: areaIds }, empresaId: diag.empresaId } })
+      : 0,
+    data.consultorId
+      ? prisma.user.count({ where: { id: data.consultorId, role: { in: ROLES_P360 } } })
+      : 0,
+  ]);
+  if (participantesOk !== participanteIds.length) {
+    return { ok: false, error: "Un participante no pertenece a la empresa del diagnóstico." };
+  }
+  if (areasOk !== areaIds.length) {
+    return { ok: false, error: "Un área no pertenece a la empresa del diagnóstico." };
+  }
+  if (data.consultorId && consultorOk === 0) {
+    return { ok: false, error: "El consultor asignado no es parte del staff Procesos360." };
+  }
+
+  // Atómico: la configuración del alcance no puede quedar aplicada a medias.
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.diagnostico.update({
+        where: { id: data.diagnosticoId },
+        data: {
+          ...(data.nombre ? { nombre: data.nombre } : {}),
+          ...(data.tipo ? { tipo: data.tipo } : {}),
+          ...(data.fechaInicio !== undefined ? { fechaInicio: data.fechaInicio ? new Date(data.fechaInicio) : null } : {}),
+          ...(data.fechaCierre !== undefined ? { fechaCierre: data.fechaCierre ? new Date(data.fechaCierre) : null } : {}),
+          ...(data.consultorId !== undefined ? { consultorId: data.consultorId || null } : {}),
+          estado: diag.estado === "BORRADOR" ? "CONFIGURADO" : diag.estado,
+        },
+      });
+
+      for (const d of data.dominios) {
+        // Scope por diagnóstico repetido a propósito: defensa en profundidad.
+        await tx.diagnosticoDominio.updateMany({
+          where: { id: d.diagnosticoDominioId, diagnosticoId: data.diagnosticoId },
+          data: {
+            incluido: d.incluido,
+            areaId: d.areaId || null,
+            justificacionNoAplica: d.justificacionNoAplica.trim() || null,
+          },
+        });
+
+        // Incluir un dominio no creaba sus preguntas: solo se generaban al crear el
+        // diagnóstico. Un dominio sumado despues quedaba dentro del alcance con el
+        // cuestionario vacío, y sus participantes sin nada que responder —le pasó a
+        // Honda con Tecnología y Ciberseguridad y con Retención de Datos—. Se crean las
+        // que falten, nunca se borran: una respuesta ya escrita no se toca.
+        if (d.incluido) {
+          const dd = await tx.diagnosticoDominio.findUnique({
+            where: { id: d.diagnosticoDominioId },
+            select: { dominioId: true, respuestas: { select: { preguntaId: true } } },
+          });
+          if (dd) {
+            const yaEstan = dd.respuestas.map((r) => r.preguntaId);
+            const faltan = await tx.pregunta.findMany({
+              where: { dominioId: dd.dominioId, id: { notIn: yaEstan } },
+              select: { id: true },
+            });
+            if (faltan.length > 0) {
+              await tx.respuesta.createMany({
+                data: faltan.map((preg) => ({
+                  diagnosticoDominioId: d.diagnosticoDominioId,
+                  preguntaId: preg.id,
+                  estado: "PENDIENTE",
+                })),
+                skipDuplicates: true,
+              });
+            }
+          }
+        }
+
+        const ids = [...new Set(d.participantesIds.filter(Boolean))];
+        await tx.participanteDominio.deleteMany({
+          where: { diagnosticoDominioId: d.diagnosticoDominioId, userId: { notIn: ids } },
+        });
+        if (ids.length > 0) {
+          await tx.participanteDominio.createMany({
+            data: ids.map((userId) => ({ diagnosticoDominioId: d.diagnosticoDominioId, userId })),
+            skipDuplicates: true,
+          });
+          // Responsables de evidencia: subconjunto de los participantes del dominio.
+          const responsables = ids.filter((id) => d.responsablesEvidenciaIds.includes(id));
+          await tx.participanteDominio.updateMany({
+            where: { diagnosticoDominioId: d.diagnosticoDominioId },
+            data: { responsableEvidencia: false },
+          });
+          if (responsables.length > 0) {
+            await tx.participanteDominio.updateMany({
+              where: { diagnosticoDominioId: d.diagnosticoDominioId, userId: { in: responsables } },
+              data: { responsableEvidencia: true },
+            });
+          }
+        }
+      }
+    },
+    { timeout: 20000, maxWait: 10000 }
+  );
 
   revalidatePath(`/diagnosticos/${data.diagnosticoId}`);
   revalidatePath(`/diagnosticos/${data.diagnosticoId}/configurar`);

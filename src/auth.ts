@@ -6,7 +6,9 @@ import { prisma } from "@/lib/db";
 import type { Role } from "@/lib/constants";
 
 const credentialsSchema = z.object({
-  email: z.string().email(),
+  // El correo se normaliza: los usuarios lo escriben como lo ven en su firma o en la
+  // libreta de direcciones, con mayúsculas, y en la práctica es la misma casilla.
+  email: z.string().trim().toLowerCase().email(),
   password: z.string().min(1),
 });
 

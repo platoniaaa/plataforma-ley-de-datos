@@ -15,27 +15,32 @@ de evaluación.
 
 ```bash
 npm install
-npm run db:push      # crea la base SQLite (prisma/dev.db)
-npm run db:seed      # carga catálogo, empresa demo y usuarios
-npm run dev          # http://localhost:3000
+npm run db:push        # sincroniza el esquema con la BD (PostgreSQL)
+npm run db:seed:demo   # SOLO local: catálogo + empresa y usuarios demo
+npm run dev            # http://localhost:3000
 ```
 
-Variables en `.env`:
+Variables en `.env` (ver `.env.example` para la lista completa):
 
 ```
-DATABASE_URL="file:./dev.db"
+DATABASE_URL="postgresql://...:6543/postgres?pgbouncer=true"
+DIRECT_URL="postgresql://...:5432/postgres"
 AUTH_SECRET="<cadena-aleatoria>"
 ```
 
-## Usuarios de prueba (contraseña: `Demo1234`)
+## Seeds
 
-| Rol | Correo |
-|-----|--------|
-| Administrador Procesos360 | admin@procesos360.cl |
-| Consultor | consultor@procesos360.cl |
-| Administrador Empresa | admin@empresademo.cl |
-| Responsable de Dominio | responsable@empresademo.cl |
-| Alta Dirección | direccion@empresademo.cl |
+| Comando | Uso | Producción |
+|---------|-----|:----------:|
+| `npm run db:seed` | Catálogo (10 dominios, 83 preguntas). Idempotente, no borra nada. | ✅ |
+| `npm run db:seed:demo` | Catálogo + Empresa Demo + 5 usuarios de prueba + diagnóstico. **Resetea la BD.** | ❌ bloqueado |
+| `npm run crear-admin` | Crea el admin P360 leyendo `ADMIN_EMAIL`/`ADMIN_PASSWORD` del entorno. | ✅ |
+
+## Usuarios de prueba (SOLO entorno local, tras `npm run db:seed:demo`)
+
+Contraseña `Demo1234`, **exclusiva de desarrollo** — nunca se siembra en producción:
+`admin@procesos360.cl` · `consultor@procesos360.cl` · `admin@empresademo.cl` ·
+`responsable@empresademo.cl` · `direccion@empresademo.cl`
 
 ## Funcionalidad implementada (slice vertical)
 

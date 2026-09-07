@@ -6,11 +6,17 @@ import { Button, Input, Select } from "@/components/ui";
 import { EstadoEvidenciaBadge } from "@/components/badges";
 import { TIPO_DOCUMENTAL, ESTADO_EVIDENCIA } from "@/lib/constants";
 import {
-  subirEvidenciaAction,
+  prepararSubidaEvidenciaAction,
+  registrarEvidenciaAction,
   validarEvidenciaAction,
   eliminarEvidenciaAction,
   descargarEvidenciaAction,
 } from "./evidencia-actions";
+import { MAX_EVIDENCIA_MB, MAX_EVIDENCIA_BYTES } from "@/lib/constants";
+
+function formatearMB(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export type EvidenciaVM = {
   id: string;
@@ -40,10 +46,64 @@ export function EvidenciasPregunta({
     e.preventDefault();
     setMsg(null);
     const fd = new FormData(e.currentTarget);
-    fd.set("respuestaId", respuestaId);
+    const nombre = String(fd.get("nombre") ?? "").trim();
+    const tipoDocumental = String(fd.get("tipoDocumental") ?? "").trim() || null;
+    const vigencia = String(fd.get("vigencia") ?? "").trim() || null;
+    const archivo = fd.get("file");
+    const tieneArchivo = archivo instanceof File && archivo.size > 0;
+
+    if (!nombre) {
+      setMsg("El nombre del documento es obligatorio.");
+      return;
+    }
+    if (tieneArchivo && archivo.size > MAX_EVIDENCIA_BYTES) {
+      setMsg(
+        `El archivo pesa ${formatearMB(archivo.size)} y el máximo son ${MAX_EVIDENCIA_MB} MB.`
+      );
+      return;
+    }
+
     startTransition(async () => {
-      const res = await subirEvidenciaAction(fd);
+      let archivoPath: string | null = null;
+      let mimeType: string | null = null;
+      let tamano: number | null = null;
+
+      // El archivo va del navegador directo a Storage con una URL firmada: así no
+      // pasa por el servidor, que rechaza los envíos grandes.
+      if (tieneArchivo) {
+        setMsg(`Subiendo ${formatearMB(archivo.size)}…`);
+        const prep = await prepararSubidaEvidenciaAction(respuestaId, archivo.name, archivo.size);
+        if (!prep.ok || !prep.signedUrl) {
+          setMsg(prep.error ?? "No se pudo preparar la subida.");
+          return;
+        }
+        try {
+          const r = await fetch(prep.signedUrl, {
+            method: "PUT",
+            body: archivo,
+            headers: { "content-type": archivo.type || "application/octet-stream" },
+          });
+          if (!r.ok) throw new Error(`el servidor de archivos respondió ${r.status}`);
+        } catch (err) {
+          setMsg(`No se pudo subir el archivo: ${(err as Error).message}`);
+          return;
+        }
+        archivoPath = prep.path ?? null;
+        mimeType = archivo.type || null;
+        tamano = archivo.size;
+      }
+
+      const res = await registrarEvidenciaAction({
+        respuestaId,
+        nombre,
+        tipoDocumental,
+        vigencia,
+        archivoPath,
+        mimeType,
+        tamano,
+      });
       if (res.ok) {
+        setMsg(null);
         formRef.current?.reset();
         setAbrir(false);
         router.refresh();
@@ -135,7 +195,7 @@ export function EvidenciasPregunta({
             <Input name="vigencia" type="date" />
           </label>
           <label className="text-xs text-slate-500">
-            Archivo (máx 10 MB)
+            Archivo (máx {MAX_EVIDENCIA_MB} MB)
             <Input name="file" type="file" />
           </label>
           <div className="flex items-center gap-3 md:col-span-2">

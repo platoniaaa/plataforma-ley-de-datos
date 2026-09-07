@@ -1,11 +1,10 @@
-import { requireRole } from "@/lib/session";
-import { ROLES } from "@/lib/constants";
+import { requireAdminGlobal } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { PageHeader } from "@/components/PageHeader";
 import { EmpresasAdmin } from "./EmpresasAdmin";
 
 export default async function AdminEmpresasPage() {
-  await requireRole([ROLES.ADMIN_P360]);
+  await requireAdminGlobal();
   const empresas = await prisma.empresa.findMany({
     include: { _count: { select: { diagnosticos: true, usuarios: true } } },
     orderBy: { razonSocial: "asc" },

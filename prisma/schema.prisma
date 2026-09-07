@@ -30,11 +30,19 @@ model Empresa {
   correoResponsable    String?
   telefono             String?
   activa               Boolean  @default(true)
+  // Empresa de demostración: no aparece en la vista del staff que trabaja los
+  // clientes reales, y solo la ven las cuentas acotadas a ella. Sirve para mostrar
+  // la plataforma sin exponer datos de un cliente ni ensuciar su seguimiento.
+  esDemo               Boolean  @default(false)
   createdAt            DateTime @default(now())
 
   areas        Area[]
   usuarios     User[]
   diagnosticos Diagnostico[]
+  tratamientos TratamientoDato[]
+  fichas       FichaProceso[]
+  inventario   DatoInventario[]
+  procesos     ProcesoNegocio[]
 }
 
 model Area {
@@ -50,7 +58,115 @@ model Area {
   trataDatosSensibles  Boolean @default(false)
   usaSistemas          Boolean @default(false)
 
-  dominios DiagnosticoDominio[]
+  dominios     DiagnosticoDominio[]
+  tratamientos TratamientoDato[]
+  fichas       FichaProceso[]
+}
+
+// Ficha de proceso levantada por el equipo consultor.
+//
+// No es una evidencia. Una evidencia es la prueba que el CLIENTE entrega para respaldar
+// una respuesta suya; una ficha es el trabajo de campo de Procesos360 —la entrevista al
+// area, el flujo dibujado, el inventario que se armo en una sesion—. Mezclarlas haria que
+// el expediente no distinga lo que el cliente afirma de lo que nosotros levantamos, y esa
+// distincion es justamente la que una auditoria mira.
+//
+// Cuelga de la empresa, como el RAT: describe como opera la organizacion y sobrevive al
+// diagnostico que la levanto.
+model FichaProceso {
+  id          String   @id @default(cuid())
+  empresaId   String
+  empresa     Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  areaId      String?
+  area        Area?    @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  nombre      String
+  descripcion String?
+  archivoPath String?
+  mimeType    String?
+  tamano      Int?
+  subidoPorId String?
+  createdAt   DateTime @default(now())
+
+  @@index([empresaId])
+}
+
+// Registro de Actividades de Tratamiento (RAT).
+//
+// Cuelga de la EMPRESA y no del diagnóstico a propósito: el RAT es un registro vivo que
+// la organización mantiene por obligación legal y que sobrevive a cada levantamiento. Un
+// diagnóstico lo arranca y lo revisa; no lo posee.
+//
+// Cada campo corresponde a lo que la Ley 21.719 exige documentar por actividad. Se
+// guardan como texto libre porque son descripciones, no clasificaciones: obligar a
+// elegir de una lista cerrada haría que el registro diga lo que cabe en la lista y no
+// lo que la empresa realmente hace.
+model TratamientoDato {
+  id        String  @id @default(cuid())
+  empresaId String
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  areaId    String?
+  area      Area?   @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  // Código estable de la actividad dentro del registro: RAT-001. Es lo que permite que la
+  // matriz que se descarga y la que vuelve editada sigan hablando de la misma fila.
+  codigo String?
+
+  nombre        String // "Gestión de postulaciones", "Ficha de cliente en Salesforce"
+  // Procesos del mapa de la empresa donde se ejecuta: "S-4.2 Incorporación de Personas".
+  // Es texto y no una relación porque una actividad suele cruzar varios procesos.
+  procesos      String?
+  // El área tal como la propone el registro —"Comercial / Marketing"—, que no siempre
+  // calza con una de las áreas del levantamiento y a veces abarca dos.
+  areaPropuesta String?
+  duenoProceso  String? // dueño del proceso o Key User que puede validar la fila
+  finalidad     String?
+
+  categoriasTitulares String? // clientes, trabajadores, postulantes, proveedores
+  categoriasDatos     String? // identificación, contacto, financieros, salud
+  // Códigos del inventario de datos de la empresa: "DP-016, DP-020". Es la trazabilidad
+  // entre el RAT y el inventario, y lo que permite responder "¿dónde se usa el RUT?".
+  idsInventario       String?
+  datosInvolucrados   String? // el detalle concreto: nombre, RUT, remuneración, patente
+  clasificacionDato   String? // personal, sensible, personal asociado
+  datosSensibles      Boolean @default(false)
+
+  baseLegal String? // consentimiento, contrato, obligación legal, interés legítimo
+  origen    String? // recogido del titular, de un tercero, de fuente pública
+
+  destinatarios String? // a quién se comunican
+  encargados    String? // terceros que tratan por cuenta de la empresa
+  sistemas      String? // dónde viven los datos
+
+  transferenciaInternacional Boolean @default(false)
+  paisesDestino              String?
+  garantiasTransferencia     String?
+
+  plazoConservacion       String?
+  criterioEliminacion     String? // cuándo y cómo se elimina, bloquea o anonimiza
+  decisionesAutomatizadas String? // perfilamiento o decisiones sin intervención humana
+  medidasSeguridad        String?
+
+  evaluarEipd         String? // Sí / No / Por evaluar
+  riesgoPreliminar    String? // Bajo / Medio / Alto / Crítico
+  // Qué documentos hay que pedir para acreditar esta fila. Es lo que convierte el RAT en
+  // una lista de solicitudes concreta y no un registro que se declara y nadie prueba.
+  evidenciasSolicitar String?
+  // De dónde salió la propuesta: la ficha, el comentario o el documento que la sustenta.
+  fuenteDiseno        String?
+  observaciones       String?
+
+  // Estado de validación de la fila:
+  //   BORRADOR         lo generó la plataforma o está a medio llenar
+  //   EN_LEVANTAMIENTO se está completando con el área
+  //   EN_REVISION      la empresa lo completó y el consultor debe revisarlo
+  //   REQUIERE_AJUSTE  se revisó y volvió con observaciones
+  //   VIGENTE          validado y en vigor
+  estado    String   @default("BORRADOR")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId])
 }
 
 // ───────────────────────── Usuarios y roles ─────────────────────────
@@ -73,9 +189,42 @@ model User {
   consentimientoVersion String? // null = nunca ha aceptado
   consentimientoFecha   DateTime?
 
-  diagnosticosConsultor Diagnostico[]        @relation("consultor")
+  // Activación de la cuenta. El correo de bienvenida lleva un enlace con este token
+  // y la persona define su propia contraseña: así no viajan credenciales por correo,
+  // que es lo que los filtros de seguridad corporativos leen como phishing.
+  tokenActivacion String?   @unique
+  tokenExpira     DateTime?
+
+  // Última vez que se le envió un recordatorio, para no insistirle de más.
+  ultimoRecordatorio DateTime?
+
+  // Última vez que se le mandó el acceso (enlace de activación o contraseña nueva).
+  // Sin esto no hay forma de saber a quién ya se le escribió, y termina recibiendo
+  // tres correos distintos de tres personas del equipo el mismo día.
+  ultimoAccesoEnviado DateTime?
+
+  // La contraparte del cliente que lleva el control interno del levantamiento: ve el
+  // seguimiento de SU empresa y puede recordarle a sus colegas, sin dejar de ser un
+  // participante más que responde sus propios dominios. Es un permiso puntual y no un
+  // rol nuevo porque no cambia nada más de lo que esa persona puede hacer.
+  coordinaSeguimiento Boolean @default(false)
+
+  // La contraparte del cliente que REVISA el levantamiento de su empresa: valida
+  // respuestas, las observa, y abre y cierra dominios, igual que el equipo consultor pero
+  // solo dentro de su empresa. Además puede entrar a todos los dominios y no solo a los
+  // que responde.
+  //
+  // Es un permiso aparte de `coordinaSeguimiento` y no el mismo, aunque casi siempre se
+  // den juntos: coordinar es ver quién va atrasado, y esto cambia el estado del
+  // levantamiento —cerrar un dominio deja a los colegas en solo lectura—. Un permiso que
+  // bloquea a otras personas no puede venir de regalo con uno de lectura.
+  revisaLevantamiento Boolean @default(false)
+
+  diagnosticosConsultor Diagnostico[]              @relation("consultor")
+  equiposConsultor      ConsultorDiagnostico[]     @relation("equipoConsultor")
   participaciones       ParticipanteDominio[]
   aceptaciones          AceptacionConsentimiento[]
+  aportes               AporteRespuesta[]
 }
 
 // Registro inmutable de cada aceptación: acredita quién consintió, qué versión
@@ -95,8 +244,8 @@ model AceptacionConsentimiento {
 // ───────────────────────── Catálogo LPDP ─────────────────────────
 
 model Dominio {
-  id                String  @id @default(cuid())
-  orden             Int     @unique
+  id                String @id @default(cuid())
+  orden             Int    @unique
   nombre            String
   objetivo          String
   evidenciasMinimas String // JSON array (string)
@@ -131,14 +280,35 @@ model Diagnostico {
   estado      String    @default("BORRADOR") // BORRADOR, CONFIGURADO, EN_EJECUCION, EN_VALIDACION, CON_BRECHAS, CON_PLAN, EN_SEGUIMIENTO, PREPARADO_CERT, CERRADO
   fechaInicio DateTime?
   fechaCierre DateTime?
+  // Consultor a cargo: el que responde por el diagnostico ante el cliente. El resto del
+  // equipo asignado va en `equipo`; este campo se conserva como el lider, para que el
+  // expediente y los reportes siempre tengan un nombre al que dirigirse.
   consultorId String?
   consultor   User?     @relation("consultor", fields: [consultorId], references: [id])
   createdAt   DateTime  @default(now())
 
   dominios DiagnosticoDominio[]
+  equipo   ConsultorDiagnostico[]
   brechas  Brecha[]
   riesgos  Riesgo[]
   acciones AccionTratamiento[]
+}
+
+// Equipo consultor asignado a un diagnostico.
+//
+// Ninguna asesoria la lleva una sola persona: si el lider no esta, el cliente tiene que
+// saber a quien mas puede dirigirse, y el expediente tiene que acreditar quienes
+// intervinieron. No otorga permisos —el staff de Procesos360 ya ve todas las empresas—:
+// deja constancia de quien responde por este trabajo.
+model ConsultorDiagnostico {
+  id            String      @id @default(cuid())
+  diagnosticoId String
+  diagnostico   Diagnostico @relation(fields: [diagnosticoId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation("equipoConsultor", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+
+  @@unique([diagnosticoId, userId])
 }
 
 model DiagnosticoDominio {
@@ -168,12 +338,19 @@ model ParticipanteDominio {
   diagnosticoDominio   DiagnosticoDominio @relation(fields: [diagnosticoDominioId], references: [id], onDelete: Cascade)
   userId               String
   user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Designación organizativa: quién está a cargo de subir la evidencia del dominio.
+  // No cambia la regla de envío (la evidencia se exige a nivel de dominio para 3/4/5).
+  responsableEvidencia Boolean            @default(false)
   createdAt            DateTime           @default(now())
 
   @@unique([diagnosticoDominioId, userId])
   @@index([userId])
 }
 
+// Respuesta OFICIAL del dominio para una pregunta: la única que consumen los motores
+// de madurez, brechas y reportes. Cuando el dominio tiene varios participantes, no la
+// escriben ellos directamente sino que se consolida a partir de sus AporteRespuesta
+// (ver src/lib/engines/consolidacion.ts). El consultor puede fijarla a mano.
 model Respuesta {
   id                   String             @id @default(cuid())
   diagnosticoDominioId String
@@ -186,12 +363,58 @@ model Respuesta {
   estado               String             @default("PENDIENTE") // PENDIENTE, RESPONDIDA, VALIDADA, OBSERVADA
   observacionConsultor String?
   respondidoPorId      String?
+  // El consultor fijó esta respuesta a mano: la consolidación automática ya no la pisa.
+  consolidadaManual    Boolean            @default(false)
   updatedAt            DateTime           @updatedAt
 
   evidencias Evidencia[]
+  aportes    AporteRespuesta[]
   brecha     Brecha?
 
   @@unique([diagnosticoDominioId, preguntaId])
+}
+
+// Bitácora de cambios sobre las tablas del levantamiento (respuestas, aportes y
+// evidencias). La escriben disparadores en la base, no la aplicación: así también
+// quedan registrados los cambios hechos por scripts de mantención, y ninguna ruta
+// puede saltársela.
+//
+// Sirve para dos cosas: recuperar lo que alguien sobrescribió, y acreditar ante una
+// auditoría quién cambió qué y cuándo — el principio de responsabilidad demostrable
+// que la propia Ley 21.719 exige.
+//
+// Los disparadores se instalan con prisma/instalar-historial.ts (Prisma no gestiona
+// triggers). La purga a 12 meses la hace prisma/purgar-historial.ts.
+model HistorialCambio {
+  id         Int      @id @default(autoincrement())
+  tabla      String // Respuesta, AporteRespuesta, Evidencia
+  registroId String // id de la fila afectada
+  operacion  String // INSERT, UPDATE, DELETE
+  anterior   Json? // fila completa antes del cambio (null en INSERT)
+  nuevo      Json? // fila completa después del cambio (null en DELETE)
+  fecha      DateTime @default(now())
+
+  @@index([tabla, registroId, fecha])
+  @@index([fecha])
+}
+
+// Lo que respondió UNA persona para UNA pregunta. Cada participante tiene su propia
+// fila, así dos personas del mismo dominio nunca se sobrescriben. Los participantes
+// no ven los aportes de sus colegas; el consultor sí, y de ellos sale la oficial.
+model AporteRespuesta {
+  id                 String    @id @default(cuid())
+  respuestaId        String
+  respuesta          Respuesta @relation(fields: [respuestaId], references: [id], onDelete: Cascade)
+  userId             String
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  valor              String? // "0".."5", "N_A", "OTRO"; null = pendiente
+  comentario         String?
+  riesgoIdentificado String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([respuestaId, userId])
+  @@index([userId])
 }
 
 model Evidencia {
@@ -210,6 +433,10 @@ model Evidencia {
   mimeType             String?
   tamano               Int?
   version              String?             @default("1.0")
+  // Cuál de las evidencias mínimas del dominio queda cubierta con este documento.
+  // Hoy lo marca el consultor a mano; es el campo que más adelante va a proponer el
+  // análisis automático del documento, para que él solo confirme o corrija.
+  cubreEvidencia       String?
   estado               String              @default("PENDIENTE") // PENDIENTE, EN_REVISION, VALIDADA, OBSERVADA, RECHAZADA, VENCIDA
   vigencia             DateTime?
   observaciones        String?
@@ -273,4 +500,43 @@ model AccionTratamiento {
   validacionConsultor Boolean     @default(false)
 
   evidencias Evidencia[]
+}
+
+/// Inventario de datos personales de la empresa: el catálogo de QUÉ datos trata, con un
+/// código estable por dato (DP-016). Existe aparte del RAT porque el RAT dice qué se hace
+/// con los datos y el inventario dice cuáles son. El cruce de ambos es lo que permite
+/// responder "¿en qué actividades aparece la remuneración?" sin releer las 28 filas.
+model DatoInventario {
+  id        String  @id @default(cuid())
+  empresaId String
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  codigo           String // DP-016
+  categoria        String? // Identificación, Contacto, Laboral, Financiero…
+  nombre           String // "Remuneración"
+  titularPrincipal String? // de quién es ese dato
+  areas            String? // áreas que lo tocan
+  clasificacion    String? // Personal, Sensible, Personal asociado
+  procesos         String? // procesos del mapa donde interviene
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId])
+}
+
+/// Mapa de procesos de la empresa. Da el vocabulario con el que se nombran las actividades
+/// del RAT: sin él el análisis inventa nombres de proceso, y la matriz deja de cruzarse con
+/// la arquitectura que el cliente ya tiene.
+model ProcesoNegocio {
+  id        String  @id @default(cuid())
+  empresaId String
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  codigo String // S-4.2
+  nombre String // "Incorporación de Personas"
+
+  @@unique([empresaId, codigo])
+  @@index([empresaId])
 }

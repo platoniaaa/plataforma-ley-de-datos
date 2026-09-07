@@ -24,6 +24,15 @@ export default async function CertificacionPage({ params }: { params: Promise<{ 
         subtitle={`${diag.nombre} · readiness frente a auditoría o fiscalización`}
       />
 
+      {prep.estado === "DATOS_INSUFICIENTES" && (
+        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <strong>Índice preliminar.</strong> Solo se ha respondido el {prep.cobertura}% del
+          levantamiento (se necesita ≥ 80% para una lectura representativa). Las brechas, riesgos y
+          plan de tratamiento aún no se han evaluado, así que este índice todavía no refleja la
+          preparación real.
+        </div>
+      )}
+
       <div className="mb-6 grid gap-6 md:grid-cols-[280px_1fr]">
         {/* Índice */}
         <Card>
@@ -74,6 +83,7 @@ export default async function CertificacionPage({ params }: { params: Promise<{ 
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm md:grid-cols-3">
+            <Dato k="Cobertura del levantamiento" v={`${prep.cobertura}%`} alerta={!prep.confiable} />
             <Dato k="Madurez global" v={input.madurezGlobal != null ? input.madurezGlobal.toFixed(2) : "—"} />
             <Dato k="Brechas críticas abiertas" v={input.brechasCriticasAbiertas} alerta={input.brechasCriticasAbiertas > 0} />
             <Dato k="Riesgos críticos" v={input.riesgosCriticosAbiertos} alerta={input.riesgosCriticosAbiertos > 0} />

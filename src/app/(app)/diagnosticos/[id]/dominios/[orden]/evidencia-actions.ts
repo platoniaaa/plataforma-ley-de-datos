@@ -3,38 +3,25 @@
 import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireSession, esStaffP360 } from "@/lib/session";
+import { requireSession, sinAccesoAEmpresa, puedeRevisarDominios } from "@/lib/session";
 import { esParticipanteDominio } from "@/lib/data/diagnosticos";
 import {
-  subirEvidencia,
+  crearUrlSubidaEvidencia,
   eliminarArchivoEvidencia,
   urlFirmadaEvidencia,
   storageConfigurado,
 } from "@/lib/storage";
-import { ESTADO_EVIDENCIA, ROLES } from "@/lib/constants";
+import { ESTADO_EVIDENCIA, ROLES, MAX_EVIDENCIA_BYTES, MAX_EVIDENCIA_MB } from "@/lib/constants";
 
 export type EvidenciaResult = { ok: boolean; error?: string };
-
-const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
 function sanitizar(nombre: string): string {
   return nombre.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80);
 }
 
-/** Sube una evidencia asociada a una respuesta (pregunta) del cuestionario. */
-export async function subirEvidenciaAction(formData: FormData): Promise<EvidenciaResult> {
+/** Comprueba que quien pide subir puede hacerlo en esa respuesta. */
+async function autorizarRespuesta(respuestaId: string) {
   const session = await requireSession();
-
-  const respuestaId = String(formData.get("respuestaId") ?? "");
-  const nombre = String(formData.get("nombre") ?? "").trim();
-  const tipoDocumental = String(formData.get("tipoDocumental") ?? "").trim() || null;
-  const vigenciaRaw = String(formData.get("vigencia") ?? "").trim();
-  const file = formData.get("file");
-
-  if (!respuestaId) return { ok: false, error: "Falta la respuesta asociada." };
-  if (!nombre) return { ok: false, error: "El nombre del documento es obligatorio." };
-
-  // Control de acceso: respuesta → diagnóstico.
   const respuesta = await prisma.respuesta.findUnique({
     where: { id: respuestaId },
     select: {
@@ -48,74 +35,115 @@ export async function subirEvidenciaAction(formData: FormData): Promise<Evidenci
       },
     },
   });
-  if (!respuesta) return { ok: false, error: "Respuesta no encontrada." };
+  if (!respuesta) return { error: "Respuesta no encontrada." as const };
   const diag = respuesta.diagnosticoDominio.diagnostico;
-  if (!esStaffP360(session.user.role) && diag.empresaId !== session.user.empresaId) {
-    return { ok: false, error: "Sin acceso." };
+  if (sinAccesoAEmpresa(session, diag.empresaId)) {
+    return { error: "Sin acceso." as const };
   }
-  // El Responsable de Dominio solo adjunta evidencias en los dominios en que participa.
   if (
     session.user.role === ROLES.RESPONSABLE_DOMINIO &&
     !(await esParticipanteDominio(respuesta.diagnosticoDominio.id, session.user.id))
   ) {
-    return { ok: false, error: "Este dominio no está asignado a ti." };
+    return { error: "Este dominio no está asignado a ti." as const };
   }
+  return { session, respuesta, diag };
+}
 
-  let archivoPath: string | null = null;
-  let mimeType: string | null = null;
-  let tamano: number | null = null;
-
-  if (file instanceof File && file.size > 0) {
-    if (file.size > MAX_BYTES) return { ok: false, error: "El archivo supera 10 MB." };
-    if (!storageConfigurado()) {
-      return { ok: false, error: "Storage no configurado: falta SUPABASE_SERVICE_ROLE_KEY." };
-    }
-    const path = `${diag.id}/${respuestaId}/${randomUUID()}-${sanitizar(file.name)}`;
-    try {
-      const buf = await file.arrayBuffer();
-      archivoPath = await subirEvidencia(path, buf, file.type);
-      mimeType = file.type || null;
-      tamano = file.size;
-    } catch (e) {
-      return { ok: false, error: `Error al subir el archivo: ${(e as Error).message}` };
-    }
+/** Paso 1 de la subida: entrega una URL firmada para que el navegador envíe el
+ *  archivo directamente a Storage, sin pasar por el servidor. */
+export async function prepararSubidaEvidenciaAction(
+  respuestaId: string,
+  nombreArchivo: string,
+  tamano: number
+): Promise<{ ok: boolean; signedUrl?: string; path?: string; error?: string }> {
+  const aut = await autorizarRespuesta(respuestaId);
+  if ("error" in aut) return { ok: false, error: aut.error };
+  if (!storageConfigurado()) {
+    return { ok: false, error: "Storage no configurado: falta SUPABASE_SERVICE_ROLE_KEY." };
   }
+  if (tamano > MAX_EVIDENCIA_BYTES) {
+    return { ok: false, error: `El archivo supera ${MAX_EVIDENCIA_MB} MB.` };
+  }
+  const path = `${aut.diag.id}/${respuestaId}/${randomUUID()}-${sanitizar(nombreArchivo)}`;
+  try {
+    const { signedUrl } = await crearUrlSubidaEvidencia(path);
+    return { ok: true, signedUrl, path };
+  } catch (e) {
+    return { ok: false, error: `No se pudo preparar la subida: ${(e as Error).message}` };
+  }
+}
+
+/** Paso 2 de la subida: registra la evidencia una vez que el archivo ya está en Storage. */
+export async function registrarEvidenciaAction(datos: {
+  respuestaId: string;
+  nombre: string;
+  tipoDocumental?: string | null;
+  vigencia?: string | null;
+  archivoPath?: string | null;
+  mimeType?: string | null;
+  tamano?: number | null;
+}): Promise<EvidenciaResult> {
+  const aut = await autorizarRespuesta(datos.respuestaId);
+  if ("error" in aut) return { ok: false, error: aut.error };
+  const nombre = datos.nombre.trim();
+  if (!nombre) return { ok: false, error: "El nombre del documento es obligatorio." };
 
   await prisma.evidencia.create({
     data: {
-      respuestaId,
-      diagnosticoDominioId: respuesta.diagnosticoDominio.id,
+      respuestaId: datos.respuestaId,
+      diagnosticoDominioId: aut.respuesta.diagnosticoDominio.id,
       nombre,
-      tipoDocumental,
-      archivoPath,
-      mimeType,
-      tamano,
-      vigencia: vigenciaRaw ? new Date(vigenciaRaw) : null,
-      subidoPorId: session.user.id,
+      tipoDocumental: datos.tipoDocumental?.trim() || null,
+      archivoPath: datos.archivoPath ?? null,
+      mimeType: datos.mimeType ?? null,
+      tamano: datos.tamano ?? null,
+      vigencia: datos.vigencia ? new Date(datos.vigencia) : null,
+      subidoPorId: aut.session.user.id,
       estado: "PENDIENTE",
     },
   });
 
-  revalidatePath(`/diagnosticos/${diag.id}/dominios/${respuesta.diagnosticoDominio.dominio.orden}`);
-  revalidatePath(`/diagnosticos/${diag.id}/evidencias`);
+  revalidatePath(
+    `/diagnosticos/${aut.diag.id}/dominios/${aut.respuesta.diagnosticoDominio.dominio.orden}`
+  );
   return { ok: true };
 }
 
-/** Valida/observa/rechaza una evidencia (solo staff Procesos360). */
+/**
+ * Valida, observa o rechaza una evidencia.
+ *
+ * Comprueba la empresa además del permiso. Antes solo miraba el rol, y con el staff daba
+ * igual porque ve a todos sus clientes; desde que esto lo puede hacer alguien del cliente,
+ * el id de la evidencia venía del navegador y nada impedía revisar la de otra empresa.
+ */
 export async function validarEvidenciaAction(
   evidenciaId: string,
   estado: keyof typeof ESTADO_EVIDENCIA,
   observaciones?: string
 ): Promise<EvidenciaResult> {
-  const session = await requireSession();
-  if (!esStaffP360(session.user.role)) return { ok: false, error: "Solo el consultor puede validar." };
+  await requireSession();
   if (!(estado in ESTADO_EVIDENCIA)) return { ok: false, error: "Estado inválido." };
 
   const ev = await prisma.evidencia.findUnique({
     where: { id: evidenciaId },
-    select: { id: true, respuesta: { select: { diagnosticoDominio: { select: { diagnostico: { select: { id: true } }, dominio: { select: { orden: true } } } } } } },
+    select: {
+      id: true,
+      respuesta: {
+        select: {
+          diagnosticoDominio: {
+            select: {
+              diagnostico: { select: { id: true, empresaId: true } },
+              dominio: { select: { orden: true } },
+            },
+          },
+        },
+      },
+    },
   });
   if (!ev) return { ok: false, error: "Evidencia no encontrada." };
+  if (!(await puedeRevisarDominios(ev.respuesta?.diagnosticoDominio.diagnostico.empresaId))) {
+    return { ok: false, error: "No tienes permiso para revisar esta evidencia." };
+  }
 
   await prisma.evidencia.update({
     where: { id: evidenciaId },
@@ -144,7 +172,7 @@ export async function descargarEvidenciaAction(
   });
   if (!ev?.archivoPath) return { ok: false, error: "La evidencia no tiene archivo." };
   const empresaId = ev.respuesta?.diagnosticoDominio.diagnostico.empresaId;
-  if (!esStaffP360(session.user.role) && empresaId !== session.user.empresaId) {
+  if (sinAccesoAEmpresa(session, empresaId)) {
     return { ok: false, error: "Sin acceso." };
   }
   try {
@@ -175,7 +203,7 @@ export async function eliminarEvidenciaAction(evidenciaId: string): Promise<Evid
   });
   if (!ev) return { ok: false, error: "Evidencia no encontrada." };
   const diag = ev.respuesta?.diagnosticoDominio.diagnostico;
-  if (!esStaffP360(session.user.role) && diag?.empresaId !== session.user.empresaId) {
+  if (sinAccesoAEmpresa(session, diag?.empresaId)) {
     return { ok: false, error: "Sin acceso." };
   }
   // El Responsable de Dominio solo gestiona evidencias de los dominios en que participa.

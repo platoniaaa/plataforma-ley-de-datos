@@ -21,7 +21,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect("/consentimiento");
   }
 
-  const items = navForRole(session.user.role);
+  // El rol sale de la base, no del token: si a alguien se le amplía el acceso mientras
+  // tiene la sesión abierta, el menú se lo tiene que mostrar sin obligarlo a volver a entrar.
+  const rol = (user?.role as typeof session.user.role) ?? session.user.role;
+  const items = navForRole(rol, session.user.empresaId);
   const iniciales = (user?.nombre ?? "U")
     .split(" ")
     .map((p) => p[0])
@@ -47,7 +50,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-slate-800">{user?.nombre}</p>
-              <p className="truncate text-xs text-slate-400">{ROLE_LABELS[session.user.role]}</p>
+              <p className="truncate text-xs text-slate-400">{ROLE_LABELS[rol]}</p>
             </div>
           </div>
           <BotonTour />
@@ -69,7 +72,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       </main>
 
       <ChatWidget />
-      <Tour pasos={pasosParaRol(session.user.role)} activo={!user?.tourVisto} />
+      <Tour pasos={pasosParaRol(rol)} activo={!user?.tourVisto} />
     </div>
   );
 }

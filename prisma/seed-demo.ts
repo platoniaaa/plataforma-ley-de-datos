@@ -1,44 +1,39 @@
+// Seed de DEMO — SOLO desarrollo local. Crea datos ficticios (Empresa Demo, 5 usuarios
+// con contraseña Demo1234, un diagnóstico de ejemplo) y RESETEA todas las tablas antes.
+// Bloqueado en producción: estos datos jamás deben llegar a un entorno real.
+//
+// Uso:  npm run db:seed:demo
+
+import { readFileSync } from "fs";
+import { join } from "path";
+
+try {
+  for (const line of readFileSync(join(__dirname, "..", ".env"), "utf-8").split("\n")) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*"?([^"\r\n]*)"?\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+  }
+} catch {
+  /* sin .env local */
+}
+
+// ── GUARD: nunca en producción ──
+if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_SEED !== "true") {
+  console.error(
+    "✋ seed-demo BLOQUEADO: crea datos ficticios (Empresa Demo, usuarios Demo1234) que no " +
+      "deben existir en producción. Para producción usa 'npm run db:seed' (catálogo) y " +
+      "'npm run crear-admin'."
+  );
+  process.exit(1);
+}
+
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import dominiosData from "../src/data/dominios.json";
+import { sembrarCatalogo } from "./catalogo";
 
 const prisma = new PrismaClient();
 
-type DominioJson = {
-  orden: number;
-  nombre: string;
-  objetivo: string;
-  evidenciasMinimas: string[];
-  riesgos: string[];
-  preguntas: { orden: number; texto: string; descripcion: string }[];
-};
-
-const dominios = dominiosData as DominioJson[];
-
-// Heurística: la pregunta exige evidencia documental si menciona un artefacto verificable.
-const KEYWORDS_EVIDENCIA = [
-  "política",
-  "politica",
-  "procedimiento",
-  "contrato",
-  "registro",
-  "inventario",
-  "documenta",
-  "cláusula",
-  "clausula",
-  "acta",
-  "informe",
-  "matriz",
-  "roadmap",
-];
-
-function exigeEvidencia(texto: string): boolean {
-  const t = texto.toLowerCase();
-  return KEYWORDS_EVIDENCIA.some((k) => t.includes(k));
-}
-
 async function main() {
-  console.log("Limpiando datos...");
+  console.log("Limpiando datos (reset local)...");
   await prisma.accionTratamiento.deleteMany();
   await prisma.riesgo.deleteMany();
   await prisma.brecha.deleteMany();
@@ -52,31 +47,14 @@ async function main() {
   await prisma.user.deleteMany();
   await prisma.empresa.deleteMany();
 
-  // ── Catálogo de dominios y preguntas ──
-  console.log("Sembrando catálogo de dominios...");
-  const dominioIds: Record<number, string> = {};
-  for (const d of dominios) {
-    const dom = await prisma.dominio.create({
-      data: {
-        orden: d.orden,
-        nombre: d.nombre,
-        objetivo: d.objetivo,
-        evidenciasMinimas: JSON.stringify(d.evidenciasMinimas),
-        riesgos: JSON.stringify(d.riesgos),
-        preguntas: {
-          create: d.preguntas.map((p) => ({
-            orden: p.orden,
-            texto: p.texto,
-            descripcion: p.descripcion,
-            evidenciaObligatoria: exigeEvidencia(p.texto),
-          })),
-        },
-      },
-    });
-    dominioIds[d.orden] = dom.id;
-  }
-  const totalPreguntas = await prisma.pregunta.count();
-  console.log(`  ${dominios.length} dominios, ${totalPreguntas} preguntas.`);
+  console.log("Sembrando catálogo...");
+  const { dominios: nDom, preguntas: nPreg } = await sembrarCatalogo(prisma);
+  console.log(`  ${nDom} dominios, ${nPreg} preguntas.`);
+
+  const dominios = await prisma.dominio.findMany({
+    orderBy: { orden: "asc" },
+    include: { preguntas: { orderBy: { orden: "asc" } } },
+  });
 
   // ── Empresa demo ──
   console.log("Creando empresa demo...");
@@ -107,7 +85,7 @@ async function main() {
   });
 
   // ── Usuarios (uno por rol) ──
-  console.log("Creando usuarios...");
+  console.log("Creando usuarios demo...");
   const passwordHash = bcrypt.hashSync("Demo1234", 10);
   const mk = (nombre: string, email: string, role: string, empresaId: string | null, cargo?: string) =>
     prisma.user.create({ data: { nombre, email, passwordHash, role, empresaId, cargo } });
@@ -132,27 +110,20 @@ async function main() {
     },
   });
 
-  // Áreas de la empresa (para asignar a los dominios y calcular madurez por área).
   const areas = await prisma.area.findMany({ where: { empresaId: empresa.id }, orderBy: { nombre: "asc" } });
 
-  // DiagnosticoDominio + respuestas (pendientes) para cada pregunta
   for (const d of dominios) {
     const dd = await prisma.diagnosticoDominio.create({
       data: {
         diagnosticoId: diagnostico.id,
-        dominioId: dominioIds[d.orden],
+        dominioId: d.id,
         areaId: areas.length ? areas[(d.orden - 1) % areas.length].id : null,
         estado: "PENDIENTE",
-        // Todos los participantes responden el dominio por igual (sin responsable principal).
         participantes: { create: [{ userId: responsable.id }] },
       },
     });
-    const preguntas = await prisma.pregunta.findMany({
-      where: { dominioId: dominioIds[d.orden] },
-      orderBy: { orden: "asc" },
-    });
     await prisma.respuesta.createMany({
-      data: preguntas.map((p) => ({
+      data: d.preguntas.map((p) => ({
         diagnosticoDominioId: dd.id,
         preguntaId: p.id,
         estado: "PENDIENTE",
@@ -160,10 +131,10 @@ async function main() {
     });
   }
 
-  // ── Respuestas de ejemplo en Dominio 1 (para mostrar motores en acción) ──
+  // ── Respuestas de ejemplo en Dominio 1 (para mostrar los motores en acción) ──
   console.log("Sembrando respuestas de ejemplo en Dominio 1...");
   const dd1 = await prisma.diagnosticoDominio.findFirstOrThrow({
-    where: { diagnosticoId: diagnostico.id, dominioId: dominioIds[1] },
+    where: { diagnosticoId: diagnostico.id, dominio: { orden: 1 } },
   });
   const valoresEjemplo = ["0", "1", "2", "3", "4", "2", "1", "0", "3", "2", "1", "0", "2", "3", "1", "2"];
   const respuestas1 = await prisma.respuesta.findMany({
@@ -185,13 +156,9 @@ async function main() {
   }
   await prisma.diagnosticoDominio.update({ where: { id: dd1.id }, data: { estado: "EN_EJECUCION" } });
 
-  console.log("\n✅ Seed completado.");
-  console.log("Usuarios (contraseña: Demo1234):");
-  console.log("  admin@procesos360.cl       — Admin Procesos360");
-  console.log("  consultor@procesos360.cl   — Consultor");
-  console.log("  admin@empresademo.cl       — Admin Empresa");
-  console.log("  responsable@empresademo.cl — Responsable de Dominio");
-  console.log("  direccion@empresademo.cl   — Alta Dirección");
+  console.log("\n✅ Seed demo completado (SOLO local). Usuarios (contraseña: Demo1234):");
+  console.log("  admin@procesos360.cl · consultor@procesos360.cl · admin@empresademo.cl");
+  console.log("  responsable@empresademo.cl · direccion@empresademo.cl");
 }
 
 main()

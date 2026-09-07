@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireSession, esStaffP360 } from "@/lib/session";
+import { requireSession, esStaffP360, sinAccesoAEmpresa } from "@/lib/session";
 import { assertAccesoDiagnostico } from "@/lib/data/diagnosticos";
 import { generarPlan, type BrechaPlanInput } from "@/lib/engines/plan";
 import { ESTADO_ACCION, ROLES } from "@/lib/constants";
@@ -81,7 +81,7 @@ export async function actualizarAccionAction(input: z.input<typeof updateSchema>
     select: { diagnosticoId: true, diagnostico: { select: { empresaId: true } } },
   });
   if (!accion) return { ok: false, error: "Acción no encontrada." };
-  if (!esStaffP360(session.user.role) && accion.diagnostico.empresaId !== session.user.empresaId) {
+  if (sinAccesoAEmpresa(session, accion.diagnostico.empresaId)) {
     return { ok: false, error: "Sin acceso." };
   }
 

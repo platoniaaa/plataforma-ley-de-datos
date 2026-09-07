@@ -79,7 +79,8 @@ export function EstadoEvidenciaBadge({ estado }: { estado: string }) {
 }
 
 export function PreparacionBadge({ estado }: { estado: EstadoPreparacion }) {
-  const map: Record<EstadoPreparacion, "red" | "orange" | "yellow" | "green"> = {
+  const map: Record<EstadoPreparacion, "red" | "orange" | "yellow" | "green" | "slate"> = {
+    DATOS_INSUFICIENTES: "slate",
     NO_PREPARADO: "red",
     INICIAL: "orange",
     EN_PROCESO: "yellow",

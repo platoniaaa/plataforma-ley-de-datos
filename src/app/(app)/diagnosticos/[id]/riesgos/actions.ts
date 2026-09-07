@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireSession, esStaffP360 } from "@/lib/session";
+import { requireSession, esStaffP360, sinAccesoAEmpresa } from "@/lib/session";
 import { assertAccesoDiagnostico } from "@/lib/data/diagnosticos";
 import { generarRiesgos, type BrechaRiesgoInput } from "@/lib/engines/riesgos";
 import { nivelRiesgo, PROBABILIDAD, IMPACTO, ROLES } from "@/lib/constants";
@@ -88,7 +88,7 @@ export async function editarRiesgoAction(input: z.input<typeof editSchema>): Pro
     select: { diagnosticoId: true, diagnostico: { select: { empresaId: true } } },
   });
   if (!riesgo) return { ok: false, error: "Riesgo no encontrado." };
-  if (!esStaffP360(session.user.role) && riesgo.diagnostico.empresaId !== session.user.empresaId) {
+  if (sinAccesoAEmpresa(session, riesgo.diagnostico.empresaId)) {
     return { ok: false, error: "Sin acceso." };
   }
 

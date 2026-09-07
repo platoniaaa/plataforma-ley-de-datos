@@ -26,7 +26,7 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
-const RUT_HONDA = "11.111.111-1"; // placeholder — editar en Admin → Empresas
+const RUT_HONDA = "96.870.620-9";
 
 type AreaDef = {
   nombre: string;

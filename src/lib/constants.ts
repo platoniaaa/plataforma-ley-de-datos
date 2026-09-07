@@ -53,6 +53,23 @@ export function requiereComentario(valor: string | null | undefined): boolean {
   return valor != null && ["0", "1", "2", "N_A", "OTRO"].includes(valor);
 }
 
+/**
+ * ¿La respuesta está COMPLETA (lista para enviar el dominio)? Espejo de la validación de
+ * enviarDominio: requiere valor + comentario cuando aplica (0/1/2/N-A/Otro) + evidencia cuando
+ * es obligatoria y el control existe (3/4/5). Tener solo un valor NO cuenta como completa.
+ */
+export function respuestaCompleta(r: {
+  valor: string | null;
+  comentario: string | null;
+  evidenciaObligatoria: boolean;
+  tieneEvidencia: boolean;
+}): boolean {
+  if (r.valor == null) return false;
+  if (requiereComentario(r.valor) && !r.comentario?.trim()) return false;
+  if (r.evidenciaObligatoria && ["3", "4", "5"].includes(r.valor) && !r.tieneEvidencia) return false;
+  return true;
+}
+
 /** Las respuestas 0, 1 y 2 generan brecha preliminar. */
 export function generaBrechaPreliminar(valor: string | null | undefined): boolean {
   return valor != null && ["0", "1", "2"].includes(valor);
@@ -133,6 +150,20 @@ export const ESTADO_RESPUESTA = {
   VALIDADA: "Validada",
   OBSERVADA: "Observada",
 } as const;
+
+/** Tamaño máximo de una evidencia. El archivo viaja del navegador directo a Storage
+ *  mediante una URL firmada, así que no lo limita el servidor sino el bucket. */
+/**
+ * Cuántas fichas de proceso se aceptan en una tanda.
+ *
+ * El levantamiento de un área son cinco o seis fichas, y el de una empresa entera
+ * cuarenta. Veinte deja pasar una jornada completa sin que una equivocación al elegir la
+ * carpeta mande el disco duro a Storage.
+ */
+export const MAX_FICHAS_LOTE = 20;
+
+export const MAX_EVIDENCIA_MB = 50;
+export const MAX_EVIDENCIA_BYTES = MAX_EVIDENCIA_MB * 1024 * 1024;
 
 export const ESTADO_EVIDENCIA = {
   PENDIENTE: "Pendiente",
@@ -234,12 +265,13 @@ export function horizontePorDias(dias: number): HorizonteKey {
 
 // ───────────────────────── Preparación para certificación (doc §14) ─────────────────────────
 
-export type EstadoPreparacion = "NO_PREPARADO" | "INICIAL" | "EN_PROCESO" | "CASI" | "LISTO";
+export type EstadoPreparacion = "DATOS_INSUFICIENTES" | "NO_PREPARADO" | "INICIAL" | "EN_PROCESO" | "CASI" | "LISTO";
 
 export const ESTADO_PREPARACION: Record<
   EstadoPreparacion,
   { label: string; descripcion: string; color: string; min: number }
 > = {
+  DATOS_INSUFICIENTES: { label: "Datos insuficientes", descripcion: "Falta completar el levantamiento para evaluar la preparación", color: "#94a3b8", min: 0 },
   NO_PREPARADO: { label: "No preparado", descripcion: "Existen brechas críticas abiertas", color: "#dc2626", min: 0 },
   INICIAL: { label: "Inicial", descripcion: "Existen controles parciales", color: "#f97316", min: 30 },
   EN_PROCESO: { label: "En proceso", descripcion: "Plan de tratamiento en ejecución", color: "#eab308", min: 50 },

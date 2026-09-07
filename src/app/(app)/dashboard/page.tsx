@@ -1,10 +1,17 @@
 import Link from "next/link";
-import { requireSession, getCurrentUser, esStaffP360 } from "@/lib/session";
+import {
+  requireSession,
+  getCurrentUser,
+  esStaffP360,
+  empresaScope,
+  coordinaSeguimiento,
+} from "@/lib/session";
 import {
   ROLE_LABELS,
   NIVEL_MADUREZ,
   ROLES,
   ESTADO_DIAGNOSTICO_DESC,
+  respuestaCompleta,
   type Role,
 } from "@/lib/constants";
 import { fmt } from "@/lib/utils";
@@ -17,8 +24,10 @@ import {
 } from "@/lib/data/diagnosticos";
 import { calcularPreparacion } from "@/lib/engines/certificacion";
 import { PageHeader } from "@/components/PageHeader";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
+import { Card, CardContent, CardHeader, CardTitle, Badge } from "@/components/ui";
 import { NivelBadge, EstadoDiagnosticoBadge, PreparacionBadge } from "@/components/badges";
+import { BotonRecordatorio } from "@/components/BotonRecordatorio";
+import { pendientesGlobales } from "@/lib/data/pendientes";
 
 type SessionLike = { user: { id: string; role: Role; empresaId: string | null } };
 
@@ -37,11 +46,7 @@ export default async function DashboardPage() {
       ) : session.user.role === ROLES.ALTA_DIRECCION ? (
         <DashboardDireccion empresaId={session.user.empresaId} />
       ) : (
-        <DashboardEmpresa
-          empresaId={session.user.empresaId}
-          userId={session.user.id}
-          role={session.user.role}
-        />
+        <DashboardEmpresa session={session} />
       )}
     </>
   );
@@ -70,6 +75,8 @@ async function DashboardP360({ session }: { session: SessionLike }) {
         <Kpi label="Acciones vencidas" valor={accionesVencidas} color={accionesVencidas ? "#dc2626" : undefined} />
       </div>
 
+      <SeguimientoResumen session={session} />
+
       <Card>
         <CardHeader>
           <CardTitle>Diagnósticos recientes</CardTitle>
@@ -94,6 +101,91 @@ async function DashboardP360({ session }: { session: SessionLike }) {
         </CardContent>
       </Card>
     </>
+  );
+}
+
+/**
+ * Quién tiene respuestas pendientes, en todas las empresas a la vez. Va en la portada
+ * porque es lo primero que el consultor necesita decidir cada mañana: a quién apurar.
+ * El detalle por empresa vive en la pestaña Seguimiento de cada diagnóstico.
+ */
+async function SeguimientoResumen({ session }: { session: SessionLike }) {
+  // Mismo alcance que el resto de la portada: quien está acotado a una empresa (por
+  // ejemplo la cuenta de demostración) ve solo la suya, y el staff no ve la demo.
+  const pendientes = await pendientesGlobales(empresaScope(session));
+  if (pendientes.length === 0) return null;
+
+  // Mide que no registran ni una respuesta, no que no hayan ingresado: para eso está
+  // Accesos, que mira el consentimiento. Decirle "nunca ha entrado" a alguien que sí
+  // entró y no contestó hacía que las dos pantallas se contradijeran.
+  const sinActividad = pendientes.filter((u) => !u.ultimaActividad).length;
+  // Un diagnóstico por empresa es lo habitual: si todos son del mismo, sobra repetirlo.
+  const variosDiagnosticos = new Set(pendientes.map((d) => d.diagnosticoId)).size > 1;
+  const visibles = pendientes.slice(0, 6);
+
+  return (
+    <Card className="mb-6">
+      <CardHeader className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <CardTitle>Participantes con pendientes</CardTitle>
+          <p className="mt-0.5 text-xs text-slate-400">
+            {pendientes.length} {pendientes.length === 1 ? "persona" : "personas"}
+            {sinActividad > 0 &&
+              ` · ${sinActividad} sin responder nada`}
+          </p>
+        </div>
+        <Link
+          href={`/diagnosticos/${pendientes[0].diagnosticoId}/seguimiento`}
+          className="text-sm font-medium text-brand-600 hover:underline"
+        >
+          Ver seguimiento completo →
+        </Link>
+      </CardHeader>
+      <CardContent className="p-0">
+        <ul className="divide-y divide-slate-100">
+          {visibles.map((u) => (
+            <li
+              key={`${u.diagnosticoId}-${u.userId}`}
+              className="flex flex-wrap items-center justify-between gap-3 px-5 py-3"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium text-slate-800">{u.nombre}</span>
+                  {u.cargo && <span className="text-xs text-slate-400">{u.cargo}</span>}
+                  {!u.ultimaActividad && <Badge color="orange">Sin responder nada</Badge>}
+                  {u.totalPreguntas === 0 && u.evidenciasPendientes > 0 && (
+                    <Badge color="yellow">Falta evidencia</Badge>
+                  )}
+                </div>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {variosDiagnosticos && `${u.empresa} · `}
+                  {u.dominios.map((d) => `${d.orden}. ${d.nombre}`).join(" · ")}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                {u.totalPreguntas > 0 ? (
+                  <span className="text-sm font-semibold tabular-nums text-slate-700">
+                    {u.totalPreguntas}
+                    <span className="ml-1 text-xs font-normal text-slate-400">preg.</span>
+                  </span>
+                ) : u.evidenciasPendientes > 0 ? (
+                  <span className="text-sm font-semibold tabular-nums text-slate-700">
+                    {u.evidenciasPendientes}
+                    <span className="ml-1 text-xs font-normal text-slate-400">evid.</span>
+                  </span>
+                ) : null}
+                <BotonRecordatorio diagnosticoId={u.diagnosticoId} userId={u.userId} />
+              </div>
+            </li>
+          ))}
+        </ul>
+        {pendientes.length > visibles.length && (
+          <p className="border-t border-slate-100 px-5 py-2.5 text-xs text-slate-400">
+            y {pendientes.length - visibles.length} más
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -171,17 +263,14 @@ async function DashboardDireccion({ empresaId }: { empresaId: string | null }) {
 // del §16.3): el Responsable de Dominio ve lo suyo; el Admin de Empresa, que no participa
 // de dominios puntuales, ve el diagnóstico completo.
 
-async function DashboardEmpresa({
-  empresaId,
-  userId,
-  role,
-}: {
-  empresaId: string | null;
-  userId: string;
-  role: Role;
-}) {
+async function DashboardEmpresa({ session }: { session: SessionLike }) {
+  const { empresaId, id: userId, role } = session.user;
   const diag = await diagnosticoVigente(empresaId);
   if (!diag) return <Vacio />;
+
+  // La contraparte que lleva el control interno ve, además de su propia tarea, en qué
+  // van sus colegas. Es el mismo panel del consultor, acotado a su empresa.
+  const coordina = await coordinaSeguimiento();
 
   // Dominios en los que este usuario participa (guía directa de su tarea).
   const misDominios = await prisma.diagnosticoDominio.findMany({
@@ -192,7 +281,16 @@ async function DashboardEmpresa({
     },
     include: {
       dominio: { select: { orden: true, nombre: true, _count: { select: { preguntas: true } } } },
-      respuestas: { select: { valor: true } },
+      respuestas: {
+        select: {
+          valor: true,
+          comentario: true,
+          evidencias: { select: { archivoPath: true } },
+          pregunta: { select: { evidenciaObligatoria: true } },
+          // Solo el aporte de quien mira: su avance es el suyo, no el del dominio.
+          aportes: { where: { userId }, select: { valor: true, comentario: true } },
+        },
+      },
     },
     orderBy: { dominio: { orden: "asc" } },
   });
@@ -211,10 +309,42 @@ async function DashboardEmpresa({
   const totalAlcance = esResponsable
     ? misDominios.reduce((a, d) => a + d.dominio._count.preguntas, 0)
     : incluidos.reduce((a, d) => a + d.dominio._count.preguntas, 0);
-  const respondidasAlcance = esResponsable
-    ? misDominios.reduce((a, d) => a + d.respuestas.filter((r) => r.valor != null).length, 0)
-    : incluidos.reduce((a, d) => a + d.respuestas.filter((r) => r.valor != null).length, 0);
-  const avance = totalAlcance ? Math.round((respondidasAlcance / totalAlcance) * 100) : 0;
+  const esCompleta = (r: {
+    valor: string | null;
+    comentario: string | null;
+    evidencias: { archivoPath: string | null }[];
+    pregunta: { evidenciaObligatoria: boolean };
+  }) =>
+    respuestaCompleta({
+      valor: r.valor,
+      comentario: r.comentario,
+      evidenciaObligatoria: r.pregunta.evidenciaObligatoria,
+      tieneEvidencia: r.evidencias.some((e) => e.archivoPath),
+    });
+
+  // El Responsable de Dominio ve SU avance. Mostrarle el del dominio le hace creer que
+  // ya respondio cuando en realidad respondio un colega —y como trabaja a ciegas, ni
+  // siquiera puede ver ese trabajo para darse cuenta del malentendido.
+  const miCompleta = (r: {
+    evidencias: { archivoPath: string | null }[];
+    pregunta: { evidenciaObligatoria: boolean };
+    aportes: { valor: string | null; comentario: string | null }[];
+  }) => {
+    const a = r.aportes[0];
+    if (!a) return false;
+    return respuestaCompleta({
+      valor: a.valor,
+      comentario: a.comentario,
+      evidenciaObligatoria: r.pregunta.evidenciaObligatoria,
+      // La evidencia es del dominio: si un colega ya la subio, cuenta para todos.
+      tieneEvidencia: r.evidencias.some((e) => e.archivoPath),
+    });
+  };
+
+  const completasAlcance = esResponsable
+    ? misDominios.reduce((a, d) => a + d.respuestas.filter(miCompleta).length, 0)
+    : incluidos.reduce((a, d) => a + d.respuestas.filter(esCompleta).length, 0);
+  const avance = totalAlcance ? Math.round((completasAlcance / totalAlcance) * 100) : 0;
 
   const [evidenciasSolicitadas, evidenciasObservadas, respuestasObservadas, accionesAbiertas] =
     await Promise.all([
@@ -243,7 +373,7 @@ async function DashboardEmpresa({
           <CardContent className="flex flex-wrap gap-3">
             {misDominios.map((d) => {
               const tot = d.dominio._count.preguntas;
-              const resp = d.respuestas.filter((r) => r.valor != null).length;
+              const resp = d.respuestas.filter((r) => r.aportes[0]?.valor != null).length;
               return (
                 <Link
                   key={d.id}
@@ -269,7 +399,7 @@ async function DashboardEmpresa({
 
       <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         <Kpi label={esResponsable ? "Mis dominios" : "Tareas asignadas"} valor={tareasAsignadas} />
-        <Kpi label="Preguntas pend." valor={totalAlcance - respondidasAlcance} />
+        <Kpi label="Preguntas pend." valor={totalAlcance - completasAlcance} />
         <Kpi label="Avance" valor={`${avance}%`} />
         <Kpi label="Evid. solicitadas" valor={evidenciasSolicitadas} />
         <Kpi
@@ -279,6 +409,8 @@ async function DashboardEmpresa({
         />
         <Kpi label="Acciones correctivas" valor={accionesAbiertas} />
       </div>
+
+      {coordina && <SeguimientoResumen session={session} />}
 
       {/* "Estado del proceso" es seguimiento del diagnóstico completo (§16.3): le sirve al
           Admin de Empresa, no al Responsable de Dominio, que solo responde lo suyo (§3.4). */}

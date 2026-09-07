@@ -25,7 +25,7 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-const RUT_HONDA = "11.111.111-1";
+const RUT_HONDA = "96.870.620-9";
 
 // Columna "Roles participantes en Honda" del Excel, por dominio del CATÁLOGO.
 // Mapeo Excel→catálogo: Excel 6 (Incidentes) → catálogo 8; Excel 7 (Terceros) → catálogo 7.

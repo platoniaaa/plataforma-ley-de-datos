@@ -37,6 +37,19 @@ export async function subirEvidencia(
   return path;
 }
 
+/** URL firmada para que el navegador suba el archivo directo a Storage.
+ *  Evita que el archivo pase por el servidor, que rechaza cuerpos sobre ~4,5 MB. */
+export async function crearUrlSubidaEvidencia(
+  path: string
+): Promise<{ signedUrl: string; path: string }> {
+  const supabase = client();
+  const { data, error } = await supabase.storage
+    .from(BUCKET_EVIDENCIAS)
+    .createSignedUploadUrl(path);
+  if (error) throw error;
+  return { signedUrl: data.signedUrl, path: data.path };
+}
+
 /** URL firmada temporal para descargar/visualizar una evidencia. */
 export async function urlFirmadaEvidencia(path: string, expiresIn = 60 * 60): Promise<string> {
   const supabase = client();

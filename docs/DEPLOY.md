@@ -23,11 +23,23 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 ```bash
 npm install
-npm run db:push     # crea las tablas en Supabase
-npm run db:seed     # carga catálogo, empresa demo y usuarios
+npm run db:push        # crea las tablas en Supabase
+npm run db:seed        # SOLO catálogo (10 dominios, 83 preguntas). NO crea data demo.
+
+# Crea el administrador real de Procesos360 (reemplaza al antiguo admin demo):
+ADMIN_EMAIL="admin@procesos360.cl" ADMIN_PASSWORD="<contraseña-fuerte-12+>" \
+  ADMIN_NOMBRE="Nombre Apellido" npm run crear-admin
 ```
 
-Verifica en Supabase → Table Editor que aparezcan las tablas y datos.
+> ⚠️ **Nunca** corras `npm run db:seed:demo` ni `npm run db:reset` contra Supabase de
+> producción: crean usuarios ficticios con contraseña `Demo1234` y resetean la base. El seed
+> demo está bloqueado si `NODE_ENV=production`, pero `db:reset` hace `--force-reset` (borra todo).
+
+Parametrización del cliente (Honda): corre `npx tsx prisma/parametrizar-honda.ts`,
+`prisma/usuarios-honda.ts` y `prisma/participantes-honda.ts` **después** del catálogo. Antes,
+reemplaza el RUT placeholder `11.111.111-1` por el real y define contraseñas propias.
+
+Verifica en Supabase → Table Editor que aparezcan las tablas y el catálogo.
 
 ## 4. Subir a GitHub
 
@@ -51,8 +63,10 @@ git push -u origin main
 ## 6. Verificación
 
 - Abre la URL de Vercel → `/login`.
-- Entra con `consultor@procesos360.cl` / `Demo1234`.
+- Entra con el administrador creado en el paso 3 (`crear-admin`).
 - Recorre: Diagnósticos → un dominio → Madurez → Brechas → Reporte.
+- Confirma que **no** exista ningún usuario `@empresademo.cl` ni la "Empresa Demo S.A."
+  (en Supabase: `select count(*) from "User" where email like '%demo%';` → debe ser 0).
 
 ## 7. Supabase Storage (evidencias)
 

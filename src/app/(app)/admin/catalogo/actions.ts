@@ -3,8 +3,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireRole } from "@/lib/session";
-import { ROLES } from "@/lib/constants";
+import { requireAdminGlobal } from "@/lib/session";
 
 export type Result = { ok: boolean; error?: string };
 
@@ -16,7 +15,7 @@ const dominioSchema = z.object({
 
 /** Edita nombre y objetivo de un dominio del catálogo. */
 export async function actualizarDominioAction(input: z.input<typeof dominioSchema>): Promise<Result> {
-  await requireRole([ROLES.ADMIN_P360]);
+  await requireAdminGlobal();
   const parsed = dominioSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Datos inválidos." };
   await prisma.dominio.update({
@@ -37,7 +36,7 @@ const preguntaSchema = z.object({
 
 /** Crea o edita una pregunta de un dominio. */
 export async function guardarPreguntaAction(input: z.input<typeof preguntaSchema>): Promise<Result> {
-  await requireRole([ROLES.ADMIN_P360]);
+  await requireAdminGlobal();
   const parsed = preguntaSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Datos inválidos." };
   const d = parsed.data;
@@ -68,7 +67,7 @@ export async function guardarPreguntaAction(input: z.input<typeof preguntaSchema
 
 /** Elimina una pregunta (y sus respuestas asociadas por cascada). */
 export async function eliminarPreguntaAction(preguntaId: string): Promise<Result> {
-  await requireRole([ROLES.ADMIN_P360]);
+  await requireAdminGlobal();
   await prisma.pregunta.delete({ where: { id: preguntaId } });
   revalidatePath("/admin/catalogo");
   return { ok: true };

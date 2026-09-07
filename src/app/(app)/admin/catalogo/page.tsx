@@ -1,11 +1,10 @@
-import { requireRole } from "@/lib/session";
-import { ROLES } from "@/lib/constants";
+import { requireAdminGlobal } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { PageHeader } from "@/components/PageHeader";
 import { CatalogoAdmin } from "./CatalogoAdmin";
 
 export default async function CatalogoPage() {
-  await requireRole([ROLES.ADMIN_P360]);
+  await requireAdminGlobal();
   const dominios = await prisma.dominio.findMany({
     include: { preguntas: { orderBy: { orden: "asc" } } },
     orderBy: { orden: "asc" },

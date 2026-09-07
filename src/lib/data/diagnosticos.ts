@@ -1,9 +1,9 @@
 import "server-only";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { empresaScope, esStaffP360 } from "@/lib/session";
+import { empresaScope, puedeRevisarDominios, sinAccesoAEmpresa } from "@/lib/session";
 import { calcularMadurez, type DominioInput } from "@/lib/engines/madurez";
-import type { Role } from "@/lib/constants";
+import { respuestaCompleta, type Role } from "@/lib/constants";
 
 type SessionLike = { user: { id: string; role: Role; empresaId: string | null } };
 
@@ -14,7 +14,7 @@ export async function assertAccesoDiagnostico(diagnosticoId: string, session: Se
     select: { id: true, empresaId: true, estado: true, fechaInicio: true },
   });
   if (!diag) return null;
-  if (!esStaffP360(session.user.role) && diag.empresaId !== session.user.empresaId) return null;
+  if (sinAccesoAEmpresa(session, diag.empresaId)) return null;
   return diag;
 }
 
@@ -50,6 +50,10 @@ export async function getDiagnosticoFull(id: string, session: SessionLike) {
     include: {
       empresa: true,
       consultor: { select: { id: true, nombre: true } },
+      equipo: {
+        include: { user: { select: { id: true, nombre: true, cargo: true } } },
+        orderBy: { user: { nombre: "asc" } },
+      },
       dominios: {
         orderBy: { dominio: { orden: "asc" } },
         include: {
@@ -59,14 +63,23 @@ export async function getDiagnosticoFull(id: string, session: SessionLike) {
             orderBy: { user: { nombre: "asc" } },
           },
           area: { select: { id: true, nombre: true } },
-          respuestas: { select: { id: true, valor: true, estado: true } },
+          respuestas: {
+            select: {
+              id: true,
+              valor: true,
+              estado: true,
+              comentario: true,
+              evidencias: { select: { archivoPath: true } },
+              pregunta: { select: { evidenciaObligatoria: true } },
+            },
+          },
         },
       },
     },
   });
 
   if (!diag) notFound();
-  if (!esStaffP360(session.user.role) && diag.empresaId !== session.user.empresaId) notFound();
+  if (sinAccesoAEmpresa(session, diag.empresaId)) notFound();
   return diag;
 }
 
@@ -196,6 +209,13 @@ export async function getPreparacionInput(
     },
   });
 
+  const dominiosIncluidos = diag.dominios.filter((d) => d.incluido);
+  const preguntasEnAlcance = dominiosIncluidos.reduce((a, d) => a + d.dominio._count.preguntas, 0);
+  const preguntasRespondidas = dominiosIncluidos.reduce(
+    (a, d) => a + d.respuestas.filter((r) => r.valor != null).length,
+    0
+  );
+
   return {
     madurezGlobal,
     brechasCriticasAbiertas,
@@ -204,6 +224,8 @@ export async function getPreparacionInput(
     evidenciasRequeridas,
     planTotal,
     planCerradas,
+    preguntasRespondidas,
+    preguntasEnAlcance,
   };
 }
 
@@ -218,7 +240,12 @@ export async function getDiagnosticoDominio(
     select: { id: true, nombre: true, empresaId: true, estado: true },
   });
   if (!diag) notFound();
-  if (!esStaffP360(session.user.role) && diag.empresaId !== session.user.empresaId) notFound();
+  if (sinAccesoAEmpresa(session, diag.empresaId)) notFound();
+
+  // Quién revisa decide qué se carga, no el rol. La contraparte del cliente que revisa el
+  // levantamiento necesita ver los aportes de todos para poder consolidar: sin eso ve los
+  // botones de validar pero no lo que tendría que estar validando.
+  const revisa = await puedeRevisarDominios(diag.empresaId);
 
   const dd = await prisma.diagnosticoDominio.findFirst({
     where: { diagnosticoId, dominio: { orden: dominioOrden } },
@@ -229,7 +256,21 @@ export async function getDiagnosticoDominio(
         orderBy: { user: { nombre: "asc" } },
       },
       respuestas: {
-        include: { pregunta: true, evidencias: true },
+        include: {
+          pregunta: true,
+          evidencias: true,
+          // Aportes individuales: el participante solo recibe el suyo (responde a
+          // ciegas); quien revisa los recibe todos para poder consolidar.
+          aportes: revisa
+            ? {
+                include: { user: { select: { id: true, nombre: true, cargo: true } } },
+                orderBy: { user: { nombre: "asc" } },
+              }
+            : {
+                where: { userId: session.user.id },
+                include: { user: { select: { id: true, nombre: true, cargo: true } } },
+              },
+        },
         orderBy: { pregunta: { orden: "asc" } },
       },
     },
@@ -249,7 +290,16 @@ export function madurezDeDiagnostico(
       orden: d.dominio.orden,
       nombre: d.dominio.nombre,
       totalPreguntas: d.dominio._count.preguntas,
-      respuestas: d.respuestas.map((r) => ({ preguntaId: r.id, valor: r.valor })),
+      respuestas: d.respuestas.map((r) => ({
+        preguntaId: r.id,
+        valor: r.valor,
+        completo: respuestaCompleta({
+          valor: r.valor,
+          comentario: r.comentario,
+          evidenciaObligatoria: r.pregunta.evidenciaObligatoria,
+          tieneEvidencia: r.evidencias.some((e) => e.archivoPath),
+        }),
+      })),
     }));
   return calcularMadurez(dominios);
 }
